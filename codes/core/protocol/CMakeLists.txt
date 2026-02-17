@@ -1,8 +1,5 @@
 # Protocol模块CMakeLists.txt
 
-cmake_minimum_required(VERSION 3.15)
-project(https_server_sim_protocol)
-
 set(PROTOCOL_SOURCES
     source/protocol_handler.cpp
 )
@@ -16,4 +13,11 @@ target_compile_features(protocol PUBLIC cxx_std_17)
 target_include_directories(protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(protocol PUBLIC utils)
 
-# add_subdirectory(test)
+# Protocol模块测试用例
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/test_protocol.cpp)
+    set(PROTOCOL_TEST_SOURCES
+        test/test_protocol.cpp
+    )
+    list(APPEND CORE_TEST_SOURCES ${PROTOCOL_TEST_SOURCES})
+    set(CORE_TEST_SOURCES ${CORE_TEST_SOURCES} PARENT_SCOPE)
+endif()

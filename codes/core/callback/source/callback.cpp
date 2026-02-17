@@ -62,17 +62,11 @@ size_t CallbackStrategyManager::get_callback_count() const {
 }
 
 int CallbackStrategyManager::invoke_parse_callback(uint16_t port,
-                                             const ClientContext* ctx,
-                                             const uint8_t* in,
-                                             uint32_t inLen,
-                                             uint32_t* out_result) {
-    if (ctx == nullptr) {
-        return CALLBACK_ERR_INVALID_PARAM;
-    }
-    if (inLen > 0 && in == nullptr) {
-        return CALLBACK_ERR_INVALID_PARAM;
-    }
-    if (out_result == nullptr) {
+                                                    const ClientContext* ctx,
+                                                    const uint8_t* in,
+                                                    uint32_t inLen,
+                                                    uint32_t* out_result) {
+    if (!validate_parse_invoke_params(ctx, in, inLen, out_result)) {
         return CALLBACK_ERR_INVALID_PARAM;
     }
 
@@ -95,20 +89,11 @@ int CallbackStrategyManager::invoke_parse_callback(uint16_t port,
 }
 
 int CallbackStrategyManager::invoke_reply_callback(uint16_t port,
-                                             const ClientContext* ctx,
-                                             uint8_t* out,
-                                             uint32_t* outLen,
-                                             uint32_t* out_result) {
-    if (ctx == nullptr) {
-        return CALLBACK_ERR_INVALID_PARAM;
-    }
-    if (out == nullptr) {
-        return CALLBACK_ERR_INVALID_PARAM;
-    }
-    if (outLen == nullptr) {
-        return CALLBACK_ERR_INVALID_PARAM;
-    }
-    if (out_result == nullptr) {
+                                                    const ClientContext* ctx,
+                                                    uint8_t* out,
+                                                    uint32_t* outLen,
+                                                    uint32_t* out_result) {
+    if (!validate_reply_invoke_params(ctx, out, outLen, out_result)) {
         return CALLBACK_ERR_INVALID_PARAM;
     }
 
@@ -138,6 +123,7 @@ bool CallbackStrategyManager::validate_strategy(const CallbackStrategy* strategy
         return false;
     }
     // 检查name字符串是否为空字符串
+    // 注意：调用者必须保证name是有效的以'\0'结尾的C字符串
     if (strategy->name[0] == '\0') {
         return false;
     }
@@ -149,6 +135,41 @@ bool CallbackStrategyManager::validate_strategy(const CallbackStrategy* strategy
         return false;
     }
     if (strategy->reply == nullptr) {
+        return false;
+    }
+    return true;
+}
+
+bool CallbackStrategyManager::validate_parse_invoke_params(const ClientContext* ctx,
+                                                          const uint8_t* in,
+                                                          uint32_t inLen,
+                                                          uint32_t* out_result) const {
+    if (ctx == nullptr) {
+        return false;
+    }
+    if (inLen > 0 && in == nullptr) {
+        return false;
+    }
+    if (out_result == nullptr) {
+        return false;
+    }
+    return true;
+}
+
+bool CallbackStrategyManager::validate_reply_invoke_params(const ClientContext* ctx,
+                                                          uint8_t* out,
+                                                          uint32_t* outLen,
+                                                          uint32_t* out_result) const {
+    if (ctx == nullptr) {
+        return false;
+    }
+    if (out == nullptr) {
+        return false;
+    }
+    if (outLen == nullptr) {
+        return false;
+    }
+    if (out_result == nullptr) {
         return false;
     }
     return true;

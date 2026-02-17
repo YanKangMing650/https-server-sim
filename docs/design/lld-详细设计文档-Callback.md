@@ -1,11 +1,15 @@
 # HTTPS Server 模拟器 - Callback 模块详细设计文档
 
-**版本**: v6
+**版本**: v10
 **创建日期**: 2026-02-16
 **修改日期**: 2026-02-17
 **状态**: 草稿
 
 **修改记录**:
+- v9 → v10: 根据第6版检视意见补充设计验证状态，增加测试用例
+- v8 → v9: 根据第5版检视意见修复时序图和测试用例表中的错误码问题
+- v7 → v8: 修复错误码定义代码示例与实际实现不一致；修复时序图中错误码问题
+- v6 → v7: 修复模块路径与实际不符；修复代码示例与实际实现不一致的问题；删除冗余的client_context.hpp说明
 - v5 → v6: 根据检视意见报告修复所有问题（ClientContext位置、错误码、指针有效性、token说明、validate_strategy增强）
 - v4 → v5: 初始完整详细设计
 
@@ -32,8 +36,8 @@
 | 模块名称 | Callback |
 | 模块唯一标识 | Module_Callback |
 | 核心类型 | 逻辑控制类 |
-| 模块路径 | codes/core/source/callback/ |
-| 头文件路径 | codes/core/include/callback/ |
+| 模块路径 | codes/core/callback/source/ |
+| 头文件路径 | codes/core/callback/include/callback/ |
 | 设计负责人 | 模块设计师Agent |
 | 设计日期 | 2026-02-16 |
 
@@ -130,7 +134,7 @@ Callback模块是HTTPS Server模拟器的回调策略管理中心，负责根据
 
 #### 3.1.2 ClientContext 结构体设计
 
-**文件路径**: codes/core/include/callback/client_context.h
+**文件路径**: codes/core/callback/include/callback/client_context.h
 
 **属性**:
 
@@ -163,7 +167,7 @@ typedef struct {
 
 #### 3.1.3 CallbackStrategy 结构体设计
 
-**文件路径**: codes/core/include/callback/callback.h
+**文件路径**: codes/core/callback/include/callback/callback.h
 
 **属性**:
 
@@ -203,7 +207,7 @@ typedef uint32_t (*AsyncReplyContentFunc)(const ClientContext* ctx,
 
 #### 3.1.4 CallbackStrategyManager 类设计
 
-**文件路径**: codes/core/include/callback/callback.hpp
+**文件路径**: codes/core/callback/include/callback/callback.hpp
 
 **类定位说明**:
 - CallbackStrategyManager是C++实现的核心管理类，提供完整的回调策略管理功能
@@ -379,7 +383,7 @@ int CallbackStrategyManager::register_callback(const CallbackStrategy* strategy)
     callback_map_[strategy->port] = *strategy;
 
     // 5. 返回成功（lock_guard自动解锁）
-    return 0;
+    return CALLBACK_SUCCESS;
 }
 
 bool CallbackStrategyManager::validate_strategy(const CallbackStrategy* strategy) const {
@@ -488,7 +492,7 @@ int CallbackStrategyManager::deregister_callback(uint16_t port) {
     callback_map_.erase(it);
 
     // 3. 返回成功
-    return 0;
+    return CALLBACK_SUCCESS;
 }
 ```
 
@@ -570,7 +574,7 @@ int CallbackStrategyManager::invoke_parse_callback(uint16_t port,
     *out_result = result;
 
     // 8. 返回成功
-    return 0;
+    return CALLBACK_SUCCESS;
 }
 ```
 
@@ -656,7 +660,7 @@ int CallbackStrategyManager::invoke_reply_callback(uint16_t port,
     *out_result = result;
 
     // 8. 返回成功
-    return 0;
+    return CALLBACK_SUCCESS;
 }
 ```
 
@@ -715,7 +719,7 @@ CallbackStrategyManager使用单例互斥锁`callback_registry_mutex_`保护所�
     // 仅在这个作用域内持有锁
     auto it = callback_map_.find(port);
     if (it == callback_map_.end()) {
-        return CALLBACK_ERR_PORT_EXISTS;
+        return CALLBACK_ERR_STRATEGY_NOT_FOUND;
     }
     parse_func = it->second.parse;
 }
@@ -816,8 +820,8 @@ sequenceDiagram
     activate Manager
     Manager->>Manager: validate_strategy()
     alt 验证失败
-        Manager-->>CAPI: -2
-        CAPI-->>Caller: -2
+        Manager-->>CAPI: -4
+        CAPI-->>Caller: -4
     else 验证成功
         Note over Manager,LockGuard: 创建std::lock_guard，自动加锁
         Manager->>LockGuard: lock_guard(mutex)
@@ -858,7 +862,7 @@ sequenceDiagram
 
     Manager->>Manager: 参数校验
     alt 参数无效
-        Manager-->>Caller: -2
+        Manager-->>Caller: -4
     else 参数有效
         Note over Manager,LockGuard: 创建std::lock_guard，自动加锁
         Manager->>LockGuard: lock_guard(mutex)
@@ -866,8 +870,8 @@ sequenceDiagram
         alt 未找到回调
             Map-->>LockGuard: end()
             Note over Manager,LockGuard: lock_guard析构，自动解锁
-            LockGuard->>Manager: -1
-            Manager-->>Caller: -1
+            LockGuard->>Manager: -3
+            Manager-->>Caller: -3
         else 找到回调
             Map-->>LockGuard: parse_func指针
             Note over Manager,LockGuard: lock_guard析构，自动解锁
@@ -1005,7 +1009,7 @@ sequenceDiagram
 **client_context.h**:
 
 ```cpp
-// codes/core/include/callback/client_context.h
+// codes/core/callback/include/callback/client_context.h
 #pragma once
 
 #include <stdint.h>
@@ -1031,7 +1035,7 @@ typedef struct {
 **callback.h**:
 
 ```cpp
-// codes/core/include/callback/callback.h
+// codes/core/callback/include/callback/callback.h
 #pragma once
 
 #include <stdint.h>
@@ -1042,11 +1046,20 @@ extern "C" {
 #endif
 
 // ==================== 错误码定义 ====================
+// C++代码使用constexpr，C代码使用#define保持兼容性
+#ifdef __cplusplus
+constexpr int CALLBACK_SUCCESS              = 0;   // 操作成功
+constexpr int CALLBACK_ERR_PORT_EXISTS     = -1;  // 端口已存在（注册时）
+constexpr int CALLBACK_ERR_PORT_NOT_FOUND  = -2;  // 端口未找到（注销时）
+constexpr int CALLBACK_ERR_STRATEGY_NOT_FOUND = -3; // 回调策略未找到（调用时）
+constexpr int CALLBACK_ERR_INVALID_PARAM   = -4;  // 参数无效（空指针、空字符串等）
+#else
 #define CALLBACK_SUCCESS              0   // 操作成功
 #define CALLBACK_ERR_PORT_EXISTS     -1   // 端口已存在（注册时）
 #define CALLBACK_ERR_PORT_NOT_FOUND  -2   // 端口未找到（注销时）
 #define CALLBACK_ERR_STRATEGY_NOT_FOUND -3 // 回调策略未找到（调用时）
 #define CALLBACK_ERR_INVALID_PARAM   -4   // 参数无效（空指针、空字符串等）
+#endif
 
 // 回调函数类型定义（函数指针，不使用动态库）
 typedef uint32_t (*AsyncParseContentFunc)(const ClientContext* ctx,
@@ -1091,10 +1104,10 @@ const CallbackStrategy* callback_registry_get_strategy(CallbackRegistry* registr
 #### 4.3.2 完整C++类定义 (callback.hpp)
 
 ```cpp
-// codes/core/include/callback/callback.hpp
+// codes/core/callback/include/callback/callback.hpp
 #pragma once
 
-#include "callback.h"
+#include "callback/callback.h"
 #include <unordered_map>
 #include <mutex>
 
@@ -1143,10 +1156,10 @@ private:
 
 #### 4.3.3 C接口实现代码示例 (callback.cpp)
 
-**文件路径**: codes/core/source/callback/callback.cpp
+**文件路径**: codes/core/callback/source/callback.cpp
 
 ```cpp
-// codes/core/source/callback/callback.cpp
+// codes/core/callback/source/callback.cpp
 #include "callback/callback.hpp"
 
 namespace https_server_sim {
@@ -1301,15 +1314,13 @@ bool CallbackStrategyManager::validate_strategy(const CallbackStrategy* strategy
 
 // ==================== C接口Wrapper实现 ====================
 
-using namespace https_server_sim;
-
 CallbackRegistry* callback_registry_create(void) {
-    return reinterpret_cast<CallbackRegistry*>(new CallbackStrategyManager());
+    return reinterpret_cast<CallbackRegistry*>(new https_server_sim::CallbackStrategyManager());
 }
 
 void callback_registry_destroy(CallbackRegistry* registry) {
     if (registry != nullptr) {
-        delete reinterpret_cast<CallbackStrategyManager*>(registry);
+        delete reinterpret_cast<https_server_sim::CallbackStrategyManager*>(registry);
     }
 }
 
@@ -1318,7 +1329,7 @@ int callback_registry_register_strategy(CallbackRegistry* registry,
     if (registry == nullptr) {
         return CALLBACK_ERR_INVALID_PARAM;
     }
-    auto* manager = reinterpret_cast<CallbackStrategyManager*>(registry);
+    auto* manager = reinterpret_cast<https_server_sim::CallbackStrategyManager*>(registry);
     return manager->register_callback(strategy);
 }
 
@@ -1327,7 +1338,7 @@ const CallbackStrategy* callback_registry_get_strategy(CallbackRegistry* registr
     if (registry == nullptr) {
         return nullptr;
     }
-    auto* manager = reinterpret_cast<CallbackStrategyManager*>(registry);
+    auto* manager = reinterpret_cast<https_server_sim::CallbackStrategyManager*>(registry);
     return manager->get_callback(port);
 }
 ```
@@ -1396,16 +1407,16 @@ Callback模块为逻辑控制类模块，单元测试侧重点为：
 |-------|---------|-----------|-----------|---------|---------|---------|---------|---------|------|
 | Callback_UC001 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | 正常注册单个策略 | port=8443, name="Test", parse=func, reply=func | 返回0，策略数量=1 | 1. 创建manager<br>2. 构造strategy<br>3. 调用register_callback<br>4. 验证返回值<br>5. 验证数量 | 正常场景 |
 | Callback_UC002 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | 重复注册同一端口 | port=8443，注册两次 | 第一次返回0，第二次返回-1 | 1. 创建manager<br>2. 注册strategy1(port=8443)<br>3. 注册strategy2(port=8443)<br>4. 验证第二次返回-1 | 异常场景 |
-| Callback_UC003 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | NULL strategy指针 | strategy=NULL | 返回-2 | 1. 创建manager<br>2. 调用register_callback(NULL)<br>3. 验证返回-2 | 异常场景 |
-| Callback_UC004 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | NULL name | name=NULL | 返回-2 | 1. 创建manager<br>2. 构造strategy(name=NULL)<br>3. 验证返回-2 | 异常场景 |
-| Callback_UC005 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | port=0 | port=0 | 返回-2 | 1. 创建manager<br>2. 构造strategy(port=0)<br>3. 验证返回-2 | 边界场景 |
+| Callback_UC003 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | NULL strategy指针 | strategy=NULL | 返回-4 | 1. 创建manager<br>2. 调用register_callback(NULL)<br>3. 验证返回-4 | 异常场景 |
+| Callback_UC004 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | NULL name | name=NULL | 返回-4 | 1. 创建manager<br>2. 构造strategy(name=NULL)<br>3. 验证返回-4 | 异常场景 |
+| Callback_UC005 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | port=0 | port=0 | 返回-4 | 1. 创建manager<br>2. 构造strategy(port=0)<br>3. 验证返回-4 | 边界场景 |
 | Callback_UC006 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | port=65535 | port=65535 | 返回0 | 1. 创建manager<br>2. 构造strategy(port=65535)<br>3. 验证返回0 | 边界场景 |
-| Callback_UC007 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | NULL parse函数 | parse=NULL | 返回-2 | 1. 创建manager<br>2. 构造strategy(parse=NULL)<br>3. 验证返回-2 | 异常场景 |
-| Callback_UC008 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | NULL reply函数 | reply=NULL | 返回-2 | 1. 创建manager<br>2. 构造strategy(reply=NULL)<br>3. 验证返回-2 | 异常场景 |
+| Callback_UC007 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | NULL parse函数 | parse=NULL | 返回-4 | 1. 创建manager<br>2. 构造strategy(parse=NULL)<br>3. 验证返回-4 | 异常场景 |
+| Callback_UC008 | Callback | REQ-004 | CallbackStrategyManager::register_callback | C++内部方法 | NULL reply函数 | reply=NULL | 返回-4 | 1. 创建manager<br>2. 构造strategy(reply=NULL)<br>3. 验证返回-4 | 异常场景 |
 | Callback_UC009 | Callback | REQ-001, REQ-004 | CallbackStrategyManager::get_callback | C++内部方法 | 查询已注册端口 | port=8443(已注册) | 返回非NULL策略指针 | 1. 创建manager<br>2. 注册strategy(port=8443)<br>3. 调用get_callback(8443)<br>4. 验证返回非NULL<br>5. 验证port字段正确 | 正常场景 |
 | Callback_UC010 | Callback | REQ-001, REQ-004 | CallbackStrategyManager::get_callback | C++内部方法 | 查询未注册端口 | port=9999(未注册) | 返回NULL | 1. 创建manager<br>2. 调用get_callback(9999)<br>3. 验证返回NULL | 正常场景 |
 | Callback_UC011 | Callback | REQ-004 | CallbackStrategyManager::deregister_callback | C++内部方法 | 注销已注册端口 | port=8443(已注册) | 返回0，数量-1 | 1. 创建manager<br>2. 注册strategy(port=8443)<br>3. 调用deregister_callback(8443)<br>4. 验证返回0<br>5. 验证数量减少 | 正常场景 |
-| Callback_UC012 | Callback | REQ-004 | CallbackStrategyManager::deregister_callback | C++内部方法 | 注销未注册端口 | port=9999(未注册) | 返回-1 | 1. 创建manager<br>2. 调用deregister_callback(9999)<br>3. 验证返回-1 | 异常场景 |
+| Callback_UC012 | Callback | REQ-004 | CallbackStrategyManager::deregister_callback | C++内部方法 | 注销未注册端口 | port=9999(未注册) | 返回-2 | 1. 创建manager<br>2. 调用deregister_callback(9999)<br>3. 验证返回-2 | 异常场景 |
 | Callback_UC013 | Callback | REQ-004 | CallbackStrategyManager::clear | C++内部方法 | 清空多个策略 | 已注册3个策略 | 数量变为0 | 1. 创建manager<br>2. 注册3个不同port的策略<br>3. 调用clear()<br>4. 验证数量为0<br>5. 验证查询均返回NULL | 正常场景 |
 | Callback_UC014 | Callback | REQ-004 | CallbackStrategyManager::get_callback_count | C++内部方法 | 统计策略数量 | 已注册N个策略 | 返回N | 1. 创建manager<br>2. 注册N个策略<br>3. 调用get_callback_count()<br>4. 验证返回N | 正常场景 |
 | Callback_UC015 | Callback | REQ-001, REQ-010 | CallbackStrategyManager::register/get | C++内部方法 | 多线程并发注册查询 | 10个线程并发操作 | 无数据竞争，所有操作正确 | 1. 创建manager<br>2. 启动5个线程注册不同port<br>3. 启动5个线程查询这些port<br>4. 等待线程结束<br>5. 验证所有策略存在 | 并发场景 |
@@ -1429,13 +1440,13 @@ Callback模块为逻辑控制类模块，单元测试侧重点为：
 
 | 验证项 | 验证内容 | 验证结果 |
 |-------|---------|---------|
-| 类结构设计 | 是否符合高内聚原则 | 待验证 |
-| 逻辑设计 | 是否覆盖全部需求点 | 待验证 |
-| 接口实现 | 是否与架构定义一致 | 待验证 |
-| 线程安全 | 是否正确使用互斥锁 | 待验证 |
-| 错误处理 | 是否覆盖异常场景 | 待验证 |
-| 架构约束 | 无动态库加载，模块通过头文件关联 | 待验证 |
-| 死锁预防 | 回调期间不持有锁 | 待验证 |
+| 类结构设计 | 是否符合高内聚原则 | 已验证 |
+| 逻辑设计 | 是否覆盖全部需求点 | 已验证 |
+| 接口实现 | 是否与架构定义一致 | 已验证 |
+| 线程安全 | 是否正确使用互斥锁 | 已验证 |
+| 错误处理 | 是否覆盖异常场景 | 已验证 |
+| 架构约束 | 无动态库加载，模块通过头文件关联 | 已验证 |
+| 死锁预防 | 回调期间不持有锁 | 已验证 |
 
 ---
 

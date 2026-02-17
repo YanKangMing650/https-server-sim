@@ -50,19 +50,42 @@ typedef struct {
 typedef struct CallbackStrategyManager CallbackRegistry;
 
 // ==================== 对外C接口（与架构文档一致）====================
+
+/**
+ * @brief 创建回调注册表
+ * @return 回调注册表指针，失败返回NULL
+ */
 CallbackRegistry* callback_registry_create(void);
+
+/**
+ * @brief 销毁回调注册表
+ * @param registry 回调注册表指针，可为NULL
+ */
 void callback_registry_destroy(CallbackRegistry* registry);
+
+/**
+ * @brief 注册回调策略
+ * @param registry 回调注册表指针，不可为NULL
+ * @param strategy 回调策略指针，不可为NULL
+ * @return CALLBACK_SUCCESS 注册成功
+ *         CALLBACK_ERR_INVALID_PARAM 参数无效
+ *         CALLBACK_ERR_PORT_EXISTS 端口已存在
+ */
 int callback_registry_register_strategy(CallbackRegistry* registry,
                                         const CallbackStrategy* strategy);
+
+/**
+ * @brief 获取指定端口的回调策略
+ * @param registry 回调注册表指针，不可为NULL
+ * @param port 端口号
+ * @return 回调策略指针，未找到或参数无效返回NULL
+ * @warning 返回的指针仅在以下条件下有效：
+ *   1. 无其他线程修改registry（调用deregister或destroy）
+ *   2. 该指针不应被长期持有，应短期使用
+ *   3. registry销毁后，该指针立即失效
+ */
 const CallbackStrategy* callback_registry_get_strategy(CallbackRegistry* registry,
                                                         uint16_t port);
-
-// ==================== 内部扩展C接口（暂不对外暴露）====================
-// 注意：以下接口为内部扩展，未在架构文档中定义，暂不暴露
-// int callback_registry_unregister_strategy(CallbackRegistry* registry,
-//                                           uint16_t port);
-// void callback_registry_clear(CallbackRegistry* registry);
-// size_t callback_registry_get_strategy_count(CallbackRegistry* registry);
 
 #ifdef __cplusplus
 }

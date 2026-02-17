@@ -1,8 +1,5 @@
 # Utils模块CMakeLists.txt
 
-cmake_minimum_required(VERSION 3.15)
-project(https_server_sim_utils)
-
 # 源文件列表
 set(UTILS_SOURCES
     source/error.cpp
@@ -39,5 +36,11 @@ if(WIN32)
     target_compile_definitions(utils PRIVATE _WIN32_WINNT=0x0601)
 endif()
 
-# 测试子目录
-# add_subdirectory(test)
+# Utils模块测试用例
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/test_utils.cpp)
+    set(UTILS_TEST_SOURCES
+        test/test_utils.cpp
+    )
+    list(APPEND CORE_TEST_SOURCES ${UTILS_TEST_SOURCES})
+    set(CORE_TEST_SOURCES ${CORE_TEST_SOURCES} PARENT_SCOPE)
+endif()
