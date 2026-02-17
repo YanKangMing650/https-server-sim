@@ -1,0 +1,12 @@
+// MsgCenter模块单元测试（骨架）
+
+#include <gtest/gtest.h>
+
+TEST(MsgCenterTest, DummyTest) {
+    EXPECT_TRUE(true);
+}
+
+int main(int argc, char **argv) {
+    testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}
