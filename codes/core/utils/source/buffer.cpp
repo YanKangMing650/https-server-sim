@@ -96,6 +96,8 @@ uint8_t* Buffer::reserve(size_t len) {
 }
 
 void Buffer::commit(size_t len) {
+    // 安全边界检查：只提交不超过当前可写空间的数据量
+    // 这样即使传入过大的len也不会导致write_idx_越界
     write_idx_ += std::min(len, writable_bytes());
 }
 

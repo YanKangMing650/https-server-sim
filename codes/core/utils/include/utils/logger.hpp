@@ -5,8 +5,6 @@
 #include <fstream>
 #include <mutex>
 #include <atomic>
-#include <memory>
-#include <cstdarg>
 
 namespace https_server_sim {
 namespace utils {

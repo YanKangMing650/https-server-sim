@@ -25,7 +25,7 @@ LogLevel string_to_log_level(const std::string& str) {
     if (str == "INFO")  return LogLevel::INFO;
     if (str == "WARN")  return LogLevel::WARN;
     if (str == "ERROR") return LogLevel::ERROR;
-    return LogLevel::INFO;
+    return LogLevel::INFO;  // 默认INFO
 }
 
 Logger::Logger()
@@ -61,7 +61,7 @@ int Logger::init(LogLevel level, const std::string& file) {
     if (!file.empty()) {
         file_.open(file, std::ios::out | std::ios::app);
         if (!file_.is_open()) {
-            return -1;
+            return -1;  // 打开文件失败
         }
     }
 

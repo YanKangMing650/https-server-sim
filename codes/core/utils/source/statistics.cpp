@@ -5,182 +5,148 @@
 namespace https_server_sim {
 namespace utils {
 
-Statistics::Statistics()
-    : total_connections(0)
-    , active_connections(0)
-    , peak_connections(0)
-    , total_requests(0)
-    , requests_per_second(0)
-    , bytes_received(0)
-    , bytes_sent(0)
-    , min_latency_ms(0)
-    , max_latency_ms(0)
-    , avg_latency_ms(0)
-    , p50_latency_ms(0)
-    , p95_latency_ms(0)
-    , p99_latency_ms(0)
-    , error_count(0)
-{
-}
-
-void Statistics::reset() {
-    total_connections = 0;
-    active_connections = 0;
-    peak_connections = 0;
-    total_requests = 0;
-    requests_per_second = 0;
-    bytes_received = 0;
-    bytes_sent = 0;
-    min_latency_ms = 0;
-    max_latency_ms = 0;
-    avg_latency_ms = 0;
-    p50_latency_ms = 0;
-    p95_latency_ms = 0;
-    p99_latency_ms = 0;
-    error_count = 0;
-}
-
 StatisticsManager& StatisticsManager::instance() {
-    static StatisticsManager manager;
-    return manager;
+    static StatisticsManager mgr;
+    return mgr;
 }
 
 StatisticsManager::StatisticsManager()
     : total_connections_(0)
-    , active_connections_(0)
-    , peak_connections_(0)
+    , current_connections_(0)
     , total_requests_(0)
-    , bytes_received_(0)
-    , bytes_sent_(0)
-    , error_count_(0)
-    , latency_sum_(0)
-    , latency_min_(UINT64_MAX)
-    , latency_max_(0)
+    , total_bytes_received_(0)
+    , total_bytes_sent_(0)
+    , requests_last_second_(0)
+    , requests_current_second_(0)
+    , requests_per_second_(0)
+    , avg_latency_ms_(0)
+    , p50_latency_ms_(0)
+    , p95_latency_ms_(0)
+    , p99_latency_ms_(0)
 {
-    latency_samples_.reserve(MAX_LATENCY_SAMPLES);
+    latencies_.reserve(MAX_LATENCIES);
 }
 
-StatisticsManager::~StatisticsManager() {
-}
+StatisticsManager::~StatisticsManager() = default;
 
-void StatisticsManager::record_connection_open() {
+void StatisticsManager::record_connection() {
     total_connections_.fetch_add(1, std::memory_order_relaxed);
-    uint64_t active = active_connections_.fetch_add(1, std::memory_order_relaxed) + 1;
-
-    // 更新峰值连接数
-    uint64_t peak = peak_connections_.load(std::memory_order_relaxed);
-    while (active > peak &&
-           !peak_connections_.compare_exchange_weak(peak, active,
-                                                    std::memory_order_relaxed)) {
-    }
+    current_connections_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void StatisticsManager::record_connection_close() {
-    active_connections_.fetch_sub(1, std::memory_order_relaxed);
+    current_connections_.fetch_sub(1, std::memory_order_relaxed);
 }
 
-void StatisticsManager::record_request(uint64_t latency_ms) {
+void StatisticsManager::record_request() {
     total_requests_.fetch_add(1, std::memory_order_relaxed);
+    requests_current_second_.fetch_add(1, std::memory_order_relaxed);
+}
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    add_latency_sample(latency_ms);
+void StatisticsManager::record_latency(uint32_t latency_ms) {
+    std::lock_guard<std::mutex> lock(latencies_mutex_);
+
+    if (latencies_.size() >= MAX_LATENCIES) {
+        // 缓冲区满，滑动窗口：移除旧的一半，保留新的一半
+        size_t half = MAX_LATENCIES / 2;
+        std::copy(latencies_.begin() + half, latencies_.end(), latencies_.begin());
+        latencies_.resize(half);
+    }
+    latencies_.push_back(latency_ms);
 }
 
 void StatisticsManager::record_bytes_received(uint64_t bytes) {
-    bytes_received_.fetch_add(bytes, std::memory_order_relaxed);
+    total_bytes_received_.fetch_add(bytes, std::memory_order_relaxed);
 }
 
 void StatisticsManager::record_bytes_sent(uint64_t bytes) {
-    bytes_sent_.fetch_add(bytes, std::memory_order_relaxed);
+    total_bytes_sent_.fetch_add(bytes, std::memory_order_relaxed);
 }
 
-void StatisticsManager::record_error() {
-    error_count_.fetch_add(1, std::memory_order_relaxed);
-}
-
-Statistics StatisticsManager::get_statistics() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    Statistics stats;
-    stats.total_connections = total_connections_.load(std::memory_order_relaxed);
-    stats.active_connections = active_connections_.load(std::memory_order_relaxed);
-    stats.peak_connections = peak_connections_.load(std::memory_order_relaxed);
-    stats.total_requests = total_requests_.load(std::memory_order_relaxed);
-    stats.bytes_received = bytes_received_.load(std::memory_order_relaxed);
-    stats.bytes_sent = bytes_sent_.load(std::memory_order_relaxed);
-    stats.error_count = error_count_.load(std::memory_order_relaxed);
-
-    stats.min_latency_ms = latency_min_ == UINT64_MAX ? 0 : latency_min_;
-    stats.max_latency_ms = latency_max_;
-
-    if (!latency_samples_.empty()) {
-        stats.avg_latency_ms = latency_sum_ / latency_samples_.size();
-        calculate_percentiles(stats);
-    }
-
-    return stats;
-}
-
-void StatisticsManager::reset() {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    total_connections_.store(0, std::memory_order_relaxed);
-    active_connections_.store(0, std::memory_order_relaxed);
-    peak_connections_.store(0, std::memory_order_relaxed);
-    total_requests_.store(0, std::memory_order_relaxed);
-    bytes_received_.store(0, std::memory_order_relaxed);
-    bytes_sent_.store(0, std::memory_order_relaxed);
-    error_count_.store(0, std::memory_order_relaxed);
-
-    latency_samples_.clear();
-    latency_sum_ = 0;
-    latency_min_ = UINT64_MAX;
-    latency_max_ = 0;
-}
-
-void StatisticsManager::add_latency_sample(uint64_t latency_ms) {
-    // 更新最小/最大
-    if (latency_ms < latency_min_) {
-        latency_min_ = latency_ms;
-    }
-    if (latency_ms > latency_max_) {
-        latency_max_ = latency_ms;
-    }
-
-    // 添加样本
-    if (latency_samples_.size() >= MAX_LATENCY_SAMPLES) {
-        // 移除最早的样本
-        if (!latency_samples_.empty()) {
-            latency_sum_ -= latency_samples_.front();
-            latency_samples_.erase(latency_samples_.begin());
-        }
-    }
-    latency_samples_.push_back(latency_ms);
-    latency_sum_ += latency_ms;
-}
-
-void StatisticsManager::calculate_percentiles(Statistics& stats) const {
-    if (latency_samples_.empty()) {
+void StatisticsManager::get_statistics(Statistics* stats) {
+    if (stats == nullptr) {
         return;
     }
 
-    // 创建副本进行排序
-    std::vector<uint64_t> sorted = latency_samples_;
+    stats->total_connections = total_connections_.load(std::memory_order_relaxed);
+    stats->total_requests = total_requests_.load(std::memory_order_relaxed);
+    stats->requests_per_second = requests_per_second_.load(std::memory_order_relaxed);
+    stats->total_bytes_received = total_bytes_received_.load(std::memory_order_relaxed);
+    stats->total_bytes_sent = total_bytes_sent_.load(std::memory_order_relaxed);
+
+    // 复制延迟统计
+    {
+        std::lock_guard<std::mutex> lock(latencies_mutex_);
+        stats->avg_response_latency_ms = avg_latency_ms_;
+        stats->p50_response_latency_ms = p50_latency_ms_;
+        stats->p95_response_latency_ms = p95_latency_ms_;
+        stats->p99_response_latency_ms = p99_latency_ms_;
+    }
+}
+
+uint32_t StatisticsManager::current_connections() const {
+    return current_connections_.load(std::memory_order_relaxed);
+}
+
+uint64_t StatisticsManager::total_connections() const {
+    return total_connections_.load(std::memory_order_relaxed);
+}
+
+uint64_t StatisticsManager::total_requests() const {
+    return total_requests_.load(std::memory_order_relaxed);
+}
+
+void StatisticsManager::update() {
+    // 更新RPS
+    uint64_t current = requests_current_second_.exchange(0, std::memory_order_relaxed);
+    requests_per_second_.store(current, std::memory_order_relaxed);
+    requests_last_second_.store(current, std::memory_order_relaxed);
+
+    // 计算延迟百分位
+    calculate_percentiles();
+}
+
+void StatisticsManager::reset() {
+    total_connections_.store(0, std::memory_order_relaxed);
+    current_connections_.store(0, std::memory_order_relaxed);
+    total_requests_.store(0, std::memory_order_relaxed);
+    total_bytes_received_.store(0, std::memory_order_relaxed);
+    total_bytes_sent_.store(0, std::memory_order_relaxed);
+    requests_last_second_.store(0, std::memory_order_relaxed);
+    requests_current_second_.store(0, std::memory_order_relaxed);
+    requests_per_second_.store(0, std::memory_order_relaxed);
+
+    std::lock_guard<std::mutex> lock(latencies_mutex_);
+    latencies_.clear();
+    avg_latency_ms_ = 0;
+    p50_latency_ms_ = 0;
+    p95_latency_ms_ = 0;
+    p99_latency_ms_ = 0;
+}
+
+void StatisticsManager::calculate_percentiles() {
+    std::lock_guard<std::mutex> lock(latencies_mutex_);
+
+    if (latencies_.empty()) {
+        avg_latency_ms_ = 0;
+        p50_latency_ms_ = 0;
+        p95_latency_ms_ = 0;
+        p99_latency_ms_ = 0;
+        return;
+    }
+
+    std::vector<uint32_t> sorted = latencies_;
     std::sort(sorted.begin(), sorted.end());
 
-    size_t count = sorted.size();
+    // 平均值
+    uint64_t sum = std::accumulate(sorted.begin(), sorted.end(), 0ULL);
+    avg_latency_ms_ = static_cast<uint32_t>(sum / sorted.size());
 
-    // P50
-    size_t idx_p50 = count * 50 / 100;
-    stats.p50_latency_ms = sorted[std::min(idx_p50, count - 1)];
-
-    // P95
-    size_t idx_p95 = count * 95 / 100;
-    stats.p95_latency_ms = sorted[std::min(idx_p95, count - 1)];
-
-    // P99
-    size_t idx_p99 = count * 99 / 100;
-    stats.p99_latency_ms = sorted[std::min(idx_p99, count - 1)];
+    // 百分位
+    size_t n = sorted.size();
+    p50_latency_ms_ = sorted[n * 50 / 100];
+    p95_latency_ms_ = sorted[n * 95 / 100];
+    p99_latency_ms_ = sorted[n * 99 / 100];
 }
 
 } // namespace utils

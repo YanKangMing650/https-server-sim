@@ -9,17 +9,17 @@ namespace utils {
 
 class Buffer {
 public:
-    // 默认初始容量
+    // 默认初始容量：8KB，适合大多数HTTP请求/响应场景
     static constexpr size_t DEFAULT_INITIAL_CAPACITY = 8192;
-    // 最小容量
+    // 最小容量：1KB，避免过小的缓冲区导致频繁扩容
     static constexpr size_t MIN_CAPACITY = 1024;
-    // 最大容量(64MB)
+    // 最大容量：64MB，防止单个缓冲区占用过多内存
     static constexpr size_t MAX_CAPACITY = 64 * 1024 * 1024;
-    // 扩容阈值：小于该值时翻倍扩容
+    // 扩容阈值1（64KB）：小于该值时翻倍扩容，快速增长以适应小数据
     static constexpr size_t GROWTH_THRESHOLD_DOUBLE = 64 * 1024;
-    // 扩容阈值：小于该值时1.5倍扩容
+    // 扩容阈值2（1MB）：小于该值时1.5倍扩容，平衡内存和性能
     static constexpr size_t GROWTH_THRESHOLD_15X = 1024 * 1024;
-    // 线性扩容增量
+    // 线性扩容增量：超过1MB后每次增加256KB，避免内存浪费
     static constexpr size_t GROWTH_LINEAR_INCREMENT = 256 * 1024;
 
     // 构造函数

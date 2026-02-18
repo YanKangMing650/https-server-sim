@@ -21,10 +21,10 @@ endif()
 # 初始化测试源文件列表
 set(CORE_TEST_SOURCES "")
 
-# 添加子模块（暂只启用callback模块）
-# add_subdirectory(utils)
+# 添加子模块
+add_subdirectory(utils)
 # add_subdirectory(config)
-add_subdirectory(callback)
+# add_subdirectory(callback)
 # add_subdirectory(debug_chain)
 # add_subdirectory(protocol)
 # add_subdirectory(msg_center)
@@ -76,7 +76,7 @@ if(CORE_TEST_SOURCES)
     add_executable(core_test ${CORE_TEST_SOURCES})
     target_link_libraries(core_test
         PRIVATE
-            callback
+            utils
             gtest
             pthread
     )

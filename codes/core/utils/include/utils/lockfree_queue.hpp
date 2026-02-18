@@ -223,36 +223,41 @@ size_t LockFreeQueue<T>::pop_batch(std::vector<T>& out, size_t max_count) {
     Node* first_data_node = nullptr;
     Node* last_data_node = nullptr;
 
-    // 第一阶段：遍历链表收集数据（不释放内存）
+    // ========== 第一阶段：遍历链表收集数据（不释放内存） ==========
+    // 注意：在SPSC场景下，此时只有消费者线程在读next指针
+    // 生产者可能在追加新节点，但不会修改已存在节点的next指针
     Node* curr = old_head;
     while (count < max_count) {
         Node* next = curr->next.load(std::memory_order_acquire);
         if (next == nullptr) {
-            break;
+            break;  // 队列已空
         }
 
+        // 记录第一个数据节点（用于后续释放old_head）
         if (first_data_node == nullptr) {
             first_data_node = next;
         }
         last_data_node = next;
 
+        // 取出数据
         out.push_back(std::move(next->data));
         curr = next;
         ++count;
     }
 
-    // 第二阶段：更新head并释放内存
+    // ========== 第二阶段：更新head并释放内存 ==========
     if (count > 0) {
-        // 更新head为最后一个数据节点
+        // 更新head为最后一个数据节点（成为新的哨兵节点）
         head_.store(last_data_node, std::memory_order_release);
 
-        // 释放从old_head到first_data_node之前的所有节点
-        // 注意：old_head是哨兵，first_data_node是第一个数据节点
-        curr = old_head;
-        while (curr != first_data_node) {
-            Node* next = curr->next.load(std::memory_order_relaxed);
-            delete curr;
-            curr = next;
+        // 批量释放旧节点：从old_head到first_data_node之前的节点
+        // 注意：old_head是原哨兵节点，first_data_node是第一个数据节点
+        // 释放流程：old_head -> ... -> first_data_node的前一个节点
+        Node* node_to_delete = old_head;
+        while (node_to_delete != last_data_node) {
+            Node* next_node = node_to_delete->next.load(std::memory_order_relaxed);
+            delete node_to_delete;
+            node_to_delete = next_node;
         }
     }
 
