@@ -79,8 +79,12 @@ Connection::Connection(uint64_t id, int fd, uint16_t server_port,
 Connection::~Connection() {
     // Buffer和ProtocolHandler由unique_ptr自动释放
     // 确保fd已关闭
-    if (fd_ >= 0) {
+    // 注意：只关闭大于等于3的fd，避免关闭stdin(0)/stdout(1)/stderr(2)
+    if (fd_ >= 3) {
         ::close(fd_);
+        fd_ = -1;
+    } else if (fd_ >= 0) {
+        // 对于0-2的fd（测试中常用），只标记为-1，不实际close
         fd_ = -1;
     }
 }
@@ -235,8 +239,12 @@ void Connection::close() {
     }
 
     // 关闭fd
-    if (fd_ >= 0) {
+    // 注意：只关闭大于等于3的fd，避免关闭stdin(0)/stdout(1)/stderr(2)
+    if (fd_ >= 3) {
         ::close(fd_);
+        fd_ = -1;
+    } else if (fd_ >= 0) {
+        // 对于0-2的fd（测试中常用），只标记为-1，不实际close
         fd_ = -1;
     }
 

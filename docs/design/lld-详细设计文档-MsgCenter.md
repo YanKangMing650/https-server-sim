@@ -213,6 +213,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable not_empty_;
     size_t max_size_;
+    size_t size_;           // 队列当前大小（在mutex_保护下访问）
     std::atomic<bool> queue_closed_;
 
     // 获取最高优先级的非空队列索引
@@ -446,10 +447,10 @@ private:
     size_t num_workers_;
     std::vector<std::thread> workers_;
 
-    // LockFreeQueue来自Utils模块
-    // 头文件: #include "utils/lock_free_queue.hpp"
-    // API: push(item), pop(item&) -> bool, empty() -> bool
-    LockFreeQueue<std::function<void()>> task_queue_;
+    // 任务队列：std::queue + mutex（MPMC线程安全）
+    // 头文件: #include <queue>, #include <mutex>
+    std::queue<std::function<void()>> task_queue_;
+    mutable std::mutex task_queue_mutex_;
 
     std::atomic<bool> running_;
     std::atomic<bool> queue_closed_;
@@ -496,24 +497,38 @@ EventLoop::run() 伪代码:
 ------------------------------------------------
 1. 记录当前线程ID为loop_thread_id_
 2. 设置running_ = true
-3. while running_:
-4.     从event_queue_弹出事件（阻塞）
-5.     if 事件.type != SHUTDOWN:
-6.         if event.handler不为空:
-7.             调用event.handler()
-8.     else:
-9.         break  // 收到SHUTDOWN事件，退出循环
-10. end while
-11. 清理资源
+3. // 通知等待的线程：EventLoop已启动
+4. lock start_mutex_
+5. 设置started_ = true
+6. unlock start_mutex_
+7. 调用start_cv_.notify_all()
+8. while running_:
+9.     从event_queue_弹出事件（阻塞）
+10.    if 事件.type != SHUTDOWN:
+11.        if event.handler不为空:
+12.            调用event.handler()
+13.    else:
+14.        break  // 收到SHUTDOWN事件，退出循环
+15. end while
+16. 清理资源
 ```
 
 ```
 EventLoop::stop() 伪代码:
 ------------------------------------------------
 1. 设置running_ = false
-2. 创建SHUTDOWN事件
+2. 创建SHUTDOWN事件 = Event::make_shutdown_event()
 3. 调用event_queue_->push(shutdown_event)
 4. 调用event_queue_->wake_up()  // 唤醒等待线程
+```
+
+```
+EventLoop::wait_for_started(timeout_ms) 伪代码:
+------------------------------------------------
+1. std::unique_lock<std::mutex> lock(start_mutex_)
+2. return start_cv_.wait_for(lock, timeout_ms, [this]() {
+3.     return started_.load()
+4. })
 ```
 
 ```
@@ -533,14 +548,16 @@ EventLoop::post_event() 伪代码:
 EventQueue::push(event) 伪代码:
 ------------------------------------------------
 1. 获取mutex_锁
-2. if queue_.size() >= max_size_:
-3.     释放锁
-4.     返回false
-5. priority = static_cast<uint8_t>(event.type)
-6. 将event推入priority_queues_[priority]的队尾
-7. 释放锁
-8. 调用not_empty_.notify_one()唤醒等待线程
-9. 返回true
+2. // 在锁保护下检查队列总大小（使用size_）
+3. if size_ >= max_size_:
+4.     释放锁
+5.     返回false
+6. priority = static_cast<uint8_t>(event.type)
+7. 将event推入priority_queues_[priority]的队尾
+8. ++size_
+9. 释放锁
+10.调用not_empty_.notify_one()唤醒等待线程
+11.返回true
 ```
 
 ```
@@ -551,11 +568,30 @@ EventQueue::pop() 伪代码:
 3.     not_empty_.wait(lock)
 4. if 所有队列为空:
 5.     释放锁
-6.     返回默认Event（type=SHUTDOWN）
+6.     返回Event::make_shutdown_event()
 7. idx = get_highest_priority_queue()
 8. 从priority_queues_[idx]队首取出event
-9. 释放锁
-10. 返回event
+9. --size_
+10.释放锁
+11.返回event
+```
+
+```
+EventQueue::empty() 伪代码:
+------------------------------------------------
+1. 获取mutex_锁
+2. result = (size_ == 0)
+3. 释放锁
+4. return result
+```
+
+```
+EventQueue::size() 伪代码:
+------------------------------------------------
+1. 获取mutex_锁
+2. result = size_
+3. 释放锁
+4. return result
 ```
 
 ```
@@ -646,41 +682,42 @@ IoThread::event_loop_linux() 伪代码:
 ```
 WorkerPool::worker_thread() 伪代码:
 ------------------------------------------------
-1. while running_:
+1. while running_.load():
 2.     std::function<void()> task
 3.     bool has_task = false
-4.     // 尝试快速获取任务
-5.     if task_queue_.pop(task):
-6.         has_task = true
-7.     else:
-8.         // 无任务时等待条件变量
-9.         std::unique_lock<std::mutex> lock(cv_mutex_)
-10.         // 再次检查，防止错过通知
-11.         if task_queue_.pop(task):
-12.             has_task = true
-13.         else if !queue_closed_:
-14.             // 等待任务到达或停止信号，超时100ms后重新检查
-15.             task_cv_.wait_for(lock, 100ms)
-16.             // 等待后再次尝试获取
-17.             has_task = task_queue_.pop(task)
-18.     // 检查是否应该退出
-19.     if !running_ or queue_closed_:
-20.         break
-21.     // 执行任务
-22.     if has_task:
-23.         try:
-24.             调用task()
-25.         catch (...):
-26.             捕获所有异常，记录日志
-27.         // 任务执行完成后，可选投递CALLBACK_DONE事件
-28.         if post_callback_done_ && event_loop_ != nullptr:
-29.             post_callback_done_event()
+4.     // 在单一mutex_保护下等待任务
+5.     std::unique_lock<std::mutex> lock(mutex_)
+6.     // 等待任务或停止信号
+7.     task_cv_.wait(lock, [this]() {
+8.         return !task_queue_.empty() ||
+9.                !running_.load() ||
+10.               queue_closed_.load()
+11.    })
+12.    // 检查是否应该退出
+13.    if !running_.load() or queue_closed_.load():
+14.        break
+15.    // 获取任务
+16.    if !task_queue_.empty():
+17.        task = std::move(task_queue_.front())
+18.        task_queue_.pop()
+19.        has_task = true
+20.    unlock mutex_
+21.    // 执行任务（在锁外执行，避免阻塞其他线程）
+22.    if has_task:
+23.        try:
+24.            调用task()
+25.        catch (...):
+26.            捕获所有异常，记录日志
+27.        // 任务执行完成后，可选投递CALLBACK_DONE事件
+28.        if post_callback_done_.load() && event_loop_ != nullptr:
+29.            post_callback_done_event()
 30. end while
 ```
 
 **设计说明**:
-- 使用条件变量替代`sleep_for(1ms)`轮询，减少CPU占用和任务延迟
-- 采用"双重检查"模式，避免错过任务通知
+- 使用单一互斥锁`mutex_`保护任务队列和条件变量，避免锁顺序死锁风险
+- 使用条件变量+谓词等待模式，简化逻辑并避免虚假唤醒问题
+- 任务在锁外执行，避免长时间持有锁阻塞其他线程
 - 任务执行完成后，根据配置可选投递CALLBACK_DONE事件
 
 ```
@@ -695,10 +732,8 @@ WorkerPool::post_callback_done_event() 伪代码:
 ------------------------------------------------
 1. if event_loop_ == nullptr:
 2.     return
-3. 创建Event event
-4. event.type = EventType::CALLBACK_DONE
-5. event.handler = nullptr  // 或根据需要设置
-6. 调用event_loop_->post_event(event)
+3. 创建Event event = Event::make_callback_done_event()
+4. 调用event_loop_->post_event(event)
 ```
 
 ```
@@ -713,9 +748,9 @@ WorkerPool::stop() 伪代码:
 ```
 
 **设计权衡说明**:
-- 原设计使用`sleep_for(1ms)`轮询，优点是实现简单，不依赖LockFreeQueue的扩展
-- 新设计使用条件变量，优点是低延迟、低CPU占用
-- 保留LockFreeQueue作为任务存储，条件变量仅用于通知，不破坏无锁队列的优势
+- 原设计使用`sleep_for(1ms)`轮询，优点是实现简单
+- 新设计使用条件变量 + std::queue + mutex，优点是低延迟、低CPU占用
+- 使用std::queue + mutex实现MPMC（多生产者多消费者）线程安全队列，避免SPSC无锁队列的场景限制
 
 #### 3.2.5 线程间通信机制
 
@@ -739,13 +774,12 @@ MsgCenter使用两种线程间通信机制：
 |---------|--------|--------|------|
 | EventQueue::priority_queues_ | std::mutex | 队列级 | 保护优先级队列的插入和删除 |
 | IoThread::fd_to_conn_id_等 | std::mutex | fd管理级 | 保护fd映射表的访问 |
-| WorkerPool::TaskQueue | LockFreeQueue | 无锁 | 无锁队列实现 |
-| WorkerPool::task_cv_ | std::mutex | 通知级 | 保护条件变量等待 |
+| WorkerPool::task_queue_ | std::mutex | 队列级 | 单一互斥锁保护任务队列和条件变量 |
 
 **死锁预防策略**:
-1. **避免嵌套锁**: 一个锁的保护范围内不获取另一个锁
+1. **避免嵌套锁**: WorkerPool使用单一互斥锁，不存在锁嵌套问题
 2. **原子变量优先**: 状态标志（running_、queue_closed_）使用std::atomic，不需要锁保护
-3. **最小化锁持有时间**: 锁范围内只做必要操作，提前释放锁
+3. **最小化锁持有时间**: 任务在锁外执行，避免长时间持有锁
 
 ### 3.3 可扩展性设计
 
@@ -849,7 +883,8 @@ classDiagram
     class WorkerPool {
         -size_t num_workers_
         -vector~thread~ workers_
-        -LockFreeQueue~function~ task_queue_
+        -queue~function~ task_queue_
+        -mutex task_queue_mutex_
         -atomic~bool~ running_
         -atomic~bool~ queue_closed_
         -EventLoop* event_loop_
@@ -1081,22 +1116,18 @@ bool EventQueue::is_closed() const
 - 使用`kEventPriorityCount`替代硬编码的8
 - 新增EventType枚举时无需修改此代码
 
-#### 4.2.2 LockFreeQueue依赖说明
+#### 4.2.2 任务队列实现说明
 
-LockFreeQueue来自Utils模块，使用方式：
+WorkerPool使用std::queue + mutex实现MPMC（多生产者多消费者）线程安全队列：
 
 ```cpp
 // 头文件包含
-#include "utils/lock_free_queue.hpp"
+#include <queue>
+#include <mutex>
 
 // 关键API
-// template <typename T>
-// class LockFreeQueue {
-// public:
-//     void push(const T& item);      // 入队
-//     bool pop(T& item);            // 出队，返回true表示成功
-//     bool empty() const;             // 判断是否为空
-// };
+// std::queue<std::function<void()>> task_queue_;
+// mutable std::mutex task_queue_mutex_;
 ```
 
 #### 4.2.3 MsgCenter::start()实现逻辑
@@ -1254,7 +1285,7 @@ MsgCenter模块的单元测试侧重点为：
 3. 内部模块通过头文件关联
 4. 本模块无需支持插件式扩展（仅预留handler函数扩展）
 5. 所有命名（命名空间、枚举值、方法名）严格对齐架构定义
-6. LockFreeQueue来自Utils模块，头文件路径为"utils/lock_free_queue.hpp"
+6. WorkerPool使用std::queue + std::mutex实现MPMC线程安全队列
 7. WorkerPool与EventLoop的关联为可选，通过构造函数传入EventLoop指针
 8. IO线程数量可通过MsgCenter构造函数配置，默认值为2
 9. 使用kEventPriorityCount常量替代硬编码，与EventType枚举解耦

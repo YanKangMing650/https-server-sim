@@ -11,6 +11,21 @@
 
 namespace https_server_sim {
 
+// ==================== 测试常量定义 ====================
+
+namespace {
+
+// 测试用的文件描述符（避免使用0-2的标准流）
+constexpr int TEST_FD_1 = 100;
+constexpr int TEST_FD_2 = 101;
+constexpr int TEST_FD_3 = 102;
+constexpr int TEST_FD_4 = 103;
+
+// 测试用的服务器端口
+constexpr uint16_t TEST_PORT = 443;
+
+} // anonymous namespace
+
 // ==================== Mock 类定义 ====================
 
 // Mock TimeSource 用于测试
@@ -466,7 +481,7 @@ TEST(ConnectionTest, CloseInvokesProtocolHandlerClose) {
 // ConnMgr_UT_001: 创建连接
 TEST(ConnectionManagerTest, CreateConnectionReturnsValidPointer) {
     ConnectionManager manager;
-    Connection* conn = manager.create_connection(10, 443);
+    Connection* conn = manager.create_connection(TEST_FD_1, TEST_PORT);
     EXPECT_NE(conn, nullptr);
     EXPECT_GE(conn->get_id(), 1ULL);
 }
@@ -474,7 +489,7 @@ TEST(ConnectionManagerTest, CreateConnectionReturnsValidPointer) {
 // ConnMgr_UT_002: 查找存在的连接
 TEST(ConnectionManagerTest, GetExistingConnection) {
     ConnectionManager manager;
-    Connection* conn1 = manager.create_connection(10, 443);
+    Connection* conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
     uint64_t id = conn1->get_id();
 
     Connection* conn2 = manager.get_connection(id);
@@ -491,7 +506,7 @@ TEST(ConnectionManagerTest, GetNonExistentConnectionReturnsNull) {
 // ConnMgr_UT_004: 删除连接
 TEST(ConnectionManagerTest, RemoveConnectionDeletesIt) {
     ConnectionManager manager;
-    Connection* conn = manager.create_connection(10, 443);
+    Connection* conn = manager.create_connection(TEST_FD_1, TEST_PORT);
     uint64_t id = conn->get_id();
 
     manager.remove_connection(id);
@@ -504,9 +519,9 @@ TEST(ConnectionManagerTest, GetConnectionCount) {
     ConnectionManager manager;
     EXPECT_EQ(manager.get_connection_count(), 0U);
 
-    manager.create_connection(1, 443);
-    manager.create_connection(2, 443);
-    manager.create_connection(3, 443);
+    manager.create_connection(TEST_FD_1, TEST_PORT);
+    manager.create_connection(TEST_FD_2, TEST_PORT);
+    manager.create_connection(TEST_FD_3, TEST_PORT);
 
     EXPECT_EQ(manager.get_connection_count(), 3U);
 }
@@ -514,8 +529,8 @@ TEST(ConnectionManagerTest, GetConnectionCount) {
 // ConnMgr_UT_006: 遍历连接
 TEST(ConnectionManagerTest, ForEachConnectionIteratesAll) {
     ConnectionManager manager;
-    manager.create_connection(1, 443);
-    manager.create_connection(2, 443);
+    manager.create_connection(TEST_FD_1, TEST_PORT);
+    manager.create_connection(TEST_FD_2, TEST_PORT);
 
     int count = 0;
     manager.for_each_connection([&count](Connection&) {
@@ -528,9 +543,9 @@ TEST(ConnectionManagerTest, ForEachConnectionIteratesAll) {
 // 测试for_each_connection在回调中修改连接表 (CONN-010)
 TEST(ConnectionManagerTest, ForEachConnectionSafeToModifyInCallback) {
     ConnectionManager manager;
-    Connection* conn1 = manager.create_connection(1, 443);
-    Connection* conn2 = manager.create_connection(2, 443);
-    Connection* conn3 = manager.create_connection(3, 443);
+    Connection* conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
+    Connection* conn2 = manager.create_connection(TEST_FD_2, TEST_PORT);
+    Connection* conn3 = manager.create_connection(TEST_FD_3, TEST_PORT);
     uint64_t id1 = conn1->get_id();
     uint64_t id2 = conn2->get_id();
     [[maybe_unused]] uint64_t id3 = conn3->get_id();
@@ -549,7 +564,7 @@ TEST(ConnectionManagerTest, ForEachConnectionSafeToModifyInCallback) {
 
         // 在回调中添加一个新连接
         if (conn.get_id() == id1) {
-            manager.create_connection(4, 443);
+            manager.create_connection(TEST_FD_4, TEST_PORT);
         }
     });
 
@@ -570,8 +585,8 @@ TEST(ConnectionManagerTest, CheckTimeoutsDetectsAndCallsback) {
     ConnectionManager manager(std::move(mockTime));
 
     // 创建两个连接
-    Connection* conn1 = manager.create_connection(1, 443);
-    Connection* conn2 = manager.create_connection(2, 443);
+    Connection* conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
+    Connection* conn2 = manager.create_connection(TEST_FD_2, TEST_PORT);
 
     // 让时间前进，使 conn1 超时（先更新 conn2 的活动时间）
     timePtr->advance_time(100);
@@ -596,9 +611,9 @@ TEST(ConnectionManagerTest, CheckTimeoutsSafeToRemoveConnectionInCallback) {
     ConnectionManager manager(std::move(mockTime));
 
     // 创建多个连接
-    Connection* conn1 = manager.create_connection(1, 443);
-    Connection* conn2 = manager.create_connection(2, 443);
-    Connection* conn3 = manager.create_connection(3, 443);
+    Connection* conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
+    Connection* conn2 = manager.create_connection(TEST_FD_2, TEST_PORT);
+    Connection* conn3 = manager.create_connection(TEST_FD_3, TEST_PORT);
     uint64_t id1 = conn1->get_id();
     uint64_t id2 = conn2->get_id();
     uint64_t id3 = conn3->get_id();
@@ -643,9 +658,9 @@ TEST(ConnectionManagerTest, CheckTimeoutsSafeToRemoveConnectionInCallback) {
 // ConnMgr_UT_008: 清空所有连接
 TEST(ConnectionManagerTest, ClearAllRemovesAllConnections) {
     ConnectionManager manager;
-    manager.create_connection(1, 443);
-    manager.create_connection(2, 443);
-    manager.create_connection(3, 443);
+    manager.create_connection(TEST_FD_1, TEST_PORT);
+    manager.create_connection(TEST_FD_2, TEST_PORT);
+    manager.create_connection(TEST_FD_3, TEST_PORT);
 
     EXPECT_EQ(manager.get_connection_count(), 3U);
     manager.clear_all();
@@ -659,7 +674,7 @@ TEST(ConnectionManagerTest, UseInjectedTimeSource) {
     ConnectionManager manager(std::move(mockTime));
 
     timePtr->set_time(12345);
-    Connection* conn = manager.create_connection(1, 443);
+    Connection* conn = manager.create_connection(TEST_FD_1, TEST_PORT);
 
     timePtr->set_time(12345 + 500);
     EXPECT_FALSE(conn->is_timeout(1000));
@@ -674,7 +689,7 @@ TEST(ConnectionManagerTest, CallbackTimeoutDetection) {
     MockTimeSource* timePtr = mockTime.get();
     ConnectionManager manager(std::move(mockTime));
 
-    Connection* conn = manager.create_connection(1, 443);
+    Connection* conn = manager.create_connection(TEST_FD_1, TEST_PORT);
     conn->set_callback_start_time();
 
     timePtr->advance_time(500);
@@ -727,8 +742,8 @@ TEST(ConnectionTest, IsFdValidWorks) {
 // 测试 for_each_connection const 重载 (CONN-011)
 TEST(ConnectionManagerTest, ForEachConnectionConstOverloadWorks) {
     ConnectionManager manager;
-    manager.create_connection(10, 443);
-    manager.create_connection(20, 443);
+    manager.create_connection(TEST_FD_1, TEST_PORT);
+    manager.create_connection(TEST_FD_2, TEST_PORT);
 
     int count = 0;
     const ConnectionManager& const_manager = manager;

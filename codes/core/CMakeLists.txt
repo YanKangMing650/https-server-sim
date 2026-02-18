@@ -27,7 +27,7 @@ add_subdirectory(utils)
 add_subdirectory(callback)
 # add_subdirectory(debug_chain)
 add_subdirectory(protocol)
-# add_subdirectory(msg_center)
+add_subdirectory(msg_center)
 add_subdirectory(connection)
 # add_subdirectory(server)
 
@@ -78,6 +78,7 @@ if(CORE_TEST_SOURCES)
         PRIVATE
             connection
             protocol
+            msg_center
             callback
             utils
             gtest
