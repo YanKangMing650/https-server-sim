@@ -22,12 +22,12 @@ MsgCenter::~MsgCenter() {
 int MsgCenter::start() {
     // 检查是否已在运行
     if (running_.load(std::memory_order_acquire)) {
-        return -1;
+        return static_cast<int>(MsgCenterError::ALREADY_RUNNING);
     }
 
     // 检查参数有效性
     if (io_thread_count_ == 0 || worker_thread_count_ == 0) {
-        return -2;
+        return static_cast<int>(MsgCenterError::INVALID_PARAMETER);
     }
 
     try {
@@ -66,7 +66,7 @@ int MsgCenter::start() {
         if (!event_loop_->wait_for_started(1000)) {
             // 超时，清理资源
             stop();
-            return -3;
+            return static_cast<int>(MsgCenterError::THREAD_CREATE_FAILED);
         }
 
         // 调用worker_pool_->set_post_callback_done(true)
@@ -76,11 +76,11 @@ int MsgCenter::start() {
         // 设置running_ = true
         running_.store(true, std::memory_order_release);
 
-        return 0;
+        return static_cast<int>(MsgCenterError::SUCCESS);
     } catch (const std::exception&) {
         // 清理已创建的资源
         stop();
-        return -3;
+        return static_cast<int>(MsgCenterError::THREAD_CREATE_FAILED);
     }
 }
 
@@ -137,19 +137,19 @@ void MsgCenter::post_callback_task(std::function<void()> task) {
 
 int MsgCenter::add_listen_fd(int fd) {
     if (fd < 0) {
-        return -1;
+        return static_cast<int>(MsgCenterError::INVALID_PARAMETER);
     }
     listen_fds_.push_back(fd);
-    return 0;
+    return static_cast<int>(MsgCenterError::SUCCESS);
 }
 
 int MsgCenter::remove_listen_fd(int fd) {
     auto it = std::find(listen_fds_.begin(), listen_fds_.end(), fd);
     if (it != listen_fds_.end()) {
         listen_fds_.erase(it);
-        return 0;
+        return static_cast<int>(MsgCenterError::SUCCESS);
     }
-    return -1;
+    return static_cast<int>(MsgCenterError::INVALID_PARAMETER);
 }
 
 void MsgCenter::get_statistics(utils::Statistics* stats) const {
