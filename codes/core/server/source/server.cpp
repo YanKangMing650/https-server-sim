@@ -11,28 +11,19 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
+#include <cerrno>
+#include <cstdio>
 #include <chrono>
 #include <thread>
 
 namespace https_server_sim {
 namespace server {
 
-// 错误码定义
-static constexpr int ERR_SUCCESS = 0;
-static constexpr int ERR_INVALID_STATE = -1;
-static constexpr int ERR_CONFIG_LOAD = -2;
-static constexpr int ERR_CONFIG_VALIDATE = -3;
-static constexpr int ERR_SOCKET_CREATE = -4;
-static constexpr int ERR_SOCKET_BIND = -5;
-static constexpr int ERR_SOCKET_LISTEN = -6;
-static constexpr int ERR_MSG_CENTER_START = -7;
-static constexpr int ERR_INVALID_ARGUMENT = -8;
-static constexpr int ERR_INTERNAL = -9;
-
 Server::Server()
     : status_(SERVER_STATUS_STOPPED)
     , running_(false)
     , graceful_shutdown_(false)
+    , cleaned_up_(false)
 {
 }
 
@@ -51,6 +42,9 @@ int Server::init(const std::string& config_file)
         }
         status_ = SERVER_STATUS_INITIALIZING;
     }
+
+    // 重置cleanup标志，允许再次初始化
+    cleaned_up_ = false;
 
     try {
         // 步骤2: 创建并加载配置（不加锁）
@@ -126,11 +120,15 @@ int Server::start()
     }
 
     // 步骤3: 注册监听socket到MsgCenter
+    std::vector<int> registered_fds;
     for (int fd : listen_fds_) {
         ret = msg_center_->add_listen_fd(fd);
         if (ret != ERR_SUCCESS) {
             // 注册失败，回滚已注册的fd
-            stop_accepting();
+            for (int reg_fd : registered_fds) {
+                msg_center_->remove_listen_fd(reg_fd);
+            }
+            // 先停止MsgCenter，再调用cleanup()
             msg_center_->stop();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -140,6 +138,7 @@ int Server::start()
             cleanup();
             return ERR_INTERNAL;
         }
+        registered_fds.push_back(fd);
     }
 
     // 步骤4: 记录启动时间（不加锁）
@@ -168,6 +167,11 @@ int Server::stop()
 
 void Server::cleanup()
 {
+    // 检查是否已经清理过，避免重复执行
+    if (cleaned_up_.exchange(true)) {
+        return;
+    }
+
     // 步骤1: 清理监听socket（不加锁，避免耗时操作阻塞其他线程）
     for (int fd : listen_fds_) {
         if (fd >= 0) {
@@ -233,11 +237,7 @@ void Server::get_status(ServerStatus* status) const
     // 清空并复制监听IP
     std::memset(status->listen_ip, 0, sizeof(status->listen_ip));
     if (!listen_ips_.empty()) {
-        size_t copy_len = std::min(listen_ips_[0].length(), sizeof(status->listen_ip) - 1);
-        if (copy_len > 0) {
-            std::strncpy(status->listen_ip, listen_ips_[0].c_str(), copy_len);
-            status->listen_ip[copy_len] = '\0';
-        }
+        std::snprintf(status->listen_ip, sizeof(status->listen_ip), "%s", listen_ips_[0].c_str());
     }
 }
 
@@ -247,19 +247,6 @@ void Server::get_statistics(utils::Statistics* stats) const
         return;
     }
 
-    // 从ConnectionManager获取统计信息
-    utils::Statistics conn_stats;
-    if (conn_manager_) {
-        conn_manager_->get_statistics(&conn_stats);
-    }
-
-    // 从MsgCenter获取统计信息
-    utils::Statistics msg_stats;
-    if (msg_center_) {
-        msg_center_->get_statistics(&msg_stats);
-    }
-
-    // 聚合统计信息
     // 注意：当前实现中，ConnectionManager和MsgCenter都使用StatisticsManager，
     // 所以直接获取StatisticsManager的统计信息即可
     utils::StatisticsManager::instance().get_statistics(stats);
@@ -301,11 +288,17 @@ int Server::init_listen_sockets()
 
         // 检查inet_pton返回值
         ret = inet_pton(AF_INET, listen_cfg.ip.c_str(), &addr.sin_addr);
-        if (ret <= 0) {
-            LOG_ERROR("Server", "Failed to convert IP address: %s", listen_cfg.ip.c_str());
+        if (ret == 0) {
+            LOG_ERROR("Server", "Invalid IP address format: %s", listen_cfg.ip.c_str());
             ::close(fd);
             rollback_listen_sockets();
             return ERR_INVALID_ARGUMENT;
+        } else if (ret < 0) {
+            LOG_ERROR("Server", "Failed to convert IP address: %s, errno=%d",
+                      listen_cfg.ip.c_str(), errno);
+            ::close(fd);
+            rollback_listen_sockets();
+            return ERR_INTERNAL;
         }
 
         // 绑定
@@ -368,12 +361,16 @@ void Server::graceful_shutdown()
 
 void Server::stop_accepting()
 {
+    // stop_accepting()仅在graceful_shutdown()中调用，此时msg_center_应该总是有效
+    if (msg_center_ == nullptr) {
+        LOG_ERROR("Server", "msg_center_ is null in stop_accepting()");
+        return;
+    }
+
     for (size_t i = 0; i < listen_fds_.size(); ++i) {
         int fd = listen_fds_[i];
         // 先从MsgCenter移除fd
-        if (msg_center_) {
-            msg_center_->remove_listen_fd(fd);
-        }
+        msg_center_->remove_listen_fd(fd);
         // 再关闭fd
         if (fd >= 0) {
             ::close(fd);

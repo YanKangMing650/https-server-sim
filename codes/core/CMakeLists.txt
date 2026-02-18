@@ -25,7 +25,7 @@ set(CORE_TEST_SOURCES "")
 add_subdirectory(utils)
 add_subdirectory(config)
 add_subdirectory(callback)
-# add_subdirectory(debug_chain)
+add_subdirectory(debug_chain)
 add_subdirectory(connection)
 add_subdirectory(protocol)
 add_subdirectory(msg_center)
@@ -81,6 +81,7 @@ if(CORE_TEST_SOURCES)
             protocol
             msg_center
             callback
+            debug_chain
             config
             utils
             gtest

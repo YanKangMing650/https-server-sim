@@ -21,6 +21,18 @@
 namespace https_server_sim {
 namespace server {
 
+// Server错误码
+constexpr int ERR_SUCCESS = 0;
+constexpr int ERR_INVALID_STATE = -1;
+constexpr int ERR_CONFIG_LOAD = -2;
+constexpr int ERR_CONFIG_VALIDATE = -3;
+constexpr int ERR_SOCKET_CREATE = -4;
+constexpr int ERR_SOCKET_BIND = -5;
+constexpr int ERR_SOCKET_LISTEN = -6;
+constexpr int ERR_MSG_CENTER_START = -7;
+constexpr int ERR_INVALID_ARGUMENT = -8;
+constexpr int ERR_INTERNAL = -9;
+
 // Server状态枚举
 typedef enum {
     SERVER_STATUS_STOPPED = 0,
@@ -152,6 +164,7 @@ private:
     std::chrono::steady_clock::time_point start_time_;
 
     mutable std::mutex mutex_;
+    std::atomic<bool> cleaned_up_;
 
     // 超时常量
     static constexpr int MAX_CALLBACK_TIMEOUT_SECONDS = 30;
