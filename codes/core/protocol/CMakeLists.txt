@@ -1,25 +1,25 @@
 # Protocol模块CMakeLists.txt
 
 set(PROTOCOL_SOURCES
-    source/protocol_handler.cpp
-    source/http_message.cpp
-    source/http_parser.cpp
-    source/http2_stream.cpp
-    source/hpack.cpp
-    source/tls_handler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/source/protocol_handler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/source/http_message.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/source/http_parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/source/http2_stream.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/source/hpack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/source/tls_handler.cpp
 )
 
 set(PROTOCOL_HEADERS
-    include/protocol/protocol.hpp
-    include/protocol/protocol_types.hpp
-    include/protocol/protocol_utils.hpp
-    include/protocol/protocol_handler.hpp
-    include/protocol/protocol_factory.hpp
-    include/protocol/http_message.hpp
-    include/protocol/http_parser.hpp
-    include/protocol/http2_stream.hpp
-    include/protocol/hpack.hpp
-    include/protocol/tls_handler.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/protocol.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/protocol_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/protocol_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/protocol_handler.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/protocol_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/http_message.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/http_parser.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/http2_stream.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/hpack.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/protocol/tls_handler.hpp
 )
 
 add_library(protocol STATIC ${PROTOCOL_SOURCES} ${PROTOCOL_HEADERS})
@@ -48,10 +48,10 @@ endif()
 target_link_libraries(protocol PUBLIC utils callback)
 
 # Protocol模块测试用例
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/test_protocol.cpp)
-    set(PROTOCOL_TEST_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_protocol.cpp
-    )
-    list(APPEND CORE_TEST_SOURCES ${PROTOCOL_TEST_SOURCES})
-    set(CORE_TEST_SOURCES ${CORE_TEST_SOURCES} PARENT_SCOPE)
-endif()
+set(PROTOCOL_TEST_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_protocol.cpp
+)
+
+# 添加测试到全局测试列表
+list(APPEND CORE_TEST_SOURCES ${PROTOCOL_TEST_SOURCES})
+set(CORE_TEST_SOURCES ${CORE_TEST_SOURCES} PARENT_SCOPE)

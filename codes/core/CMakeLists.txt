@@ -23,13 +23,13 @@ set(CORE_TEST_SOURCES "")
 
 # 添加子模块
 add_subdirectory(utils)
-# add_subdirectory(config)
+add_subdirectory(config)
 add_subdirectory(callback)
 # add_subdirectory(debug_chain)
 add_subdirectory(connection)
 add_subdirectory(protocol)
 add_subdirectory(msg_center)
-# add_subdirectory(server)
+add_subdirectory(server)
 
 # 暂不创建core库，直接编译callback
 # 创建core_dummy.cpp来链接所有静态库为一个动态库
@@ -76,10 +76,12 @@ if(CORE_TEST_SOURCES)
     add_executable(core_test ${CORE_TEST_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp)
     target_link_libraries(core_test
         PRIVATE
+            server
             connection
             protocol
             msg_center
             callback
+            config
             utils
             gtest
             pthread
