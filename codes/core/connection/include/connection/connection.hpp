@@ -1,38 +1,40 @@
+// =============================================================================
+//  HTTPS Server Simulator - Connection Module
+//  文件: connection.hpp
+//  描述: Connection 模块类定义
+//  版权: Copyright (c) 2026
+// =============================================================================
 #pragma once
 
 #include <cstdint>
 #include <string>
 #include <memory>
-#include <atomic>
-#include <mutex>
-#include <unordered_map>
-#include <vector>
-#include <functional>
 #include "utils/buffer.hpp"
 #include "utils/time.hpp"
 #include "protocol/protocol_handler.hpp"
 
 namespace https_server_sim {
-namespace connection {
 
 // 前置声明
 class Connection;
-class ConnectionManager;
 
 // 使用 protocol 命名空间中的 ProtocolHandler
 using ProtocolHandler = protocol::ProtocolHandler;
 
 // 连接状态枚举
 enum class ConnectionState : uint8_t {
-    ACCEPTING = 1,
-    TLS_HANDSHAKING = 2,
-    CONNECTED = 3,
-    RECEIVING = 4,
-    PROCESSING = 5,
-    SENDING = 6,
-    DISCONNECTING = 7,
-    DISCONNECTED = 8
+    ACCEPTING = 1,          // 新接受连接，等待TLS握手
+    TLS_HANDSHAKING = 2,    // TLS握手进行中
+    CONNECTED = 3,          // 连接已建立，空闲状态
+    RECEIVING = 4,          // 接收请求数据中
+    PROCESSING = 5,         // 处理请求中
+    SENDING = 6,            // 发送响应数据中
+    DISCONNECTING = 7,      // 断开连接中
+    DISCONNECTED = 8        // 连接已断开，最终状态
 };
+
+// ConnectionState 枚举字符串化函数
+const char* connection_state_to_string(ConnectionState state);
 
 // Client信息结构体
 struct ClientInfo {
@@ -109,6 +111,9 @@ public:
     // 获取socket fd
     int get_fd() const;
 
+    // 检查fd是否有效
+    bool is_fd_valid() const;
+
     // ========== Client信息 ==========
 
     // 获取Client IP
@@ -174,64 +179,25 @@ private:
     // 检查状态转换是否合法
     bool is_valid_state_transition(ConnectionState from, ConnectionState to) const;
 
-    uint64_t connection_id_;
-    int fd_;
-    ConnectionState state_;
-    ClientInfo client_info_;
-    std::unique_ptr<utils::Buffer> read_buffer_;
-    std::unique_ptr<utils::Buffer> write_buffer_;
-    std::unique_ptr<ProtocolHandler> protocol_handler_;
-    uint64_t last_activity_time_;
-    uint64_t callback_start_time_;
-    bool in_callback_;
-    const TimeSource* time_source_;
-    ConnectionCallback* state_callback_;
+    // 友元测试类，用于直接测试private方法
+    friend class ConnectionTest_IsValidStateTransition_Test;
+    friend class ConnectionTest_IsValidStateTransitionDirect_Test;
+
+    // 成员变量（默认值见构造函数初始化）
+    uint64_t connection_id_;                 // 默认值: 构造函数传入
+    int fd_;                                 // 默认值: 构造函数传入
+    ConnectionState state_;                  // 默认值: ACCEPTING
+    ClientInfo client_info_;                 // 默认值: {}
+    std::unique_ptr<utils::Buffer> read_buffer_;  // 默认值: 创建Buffer对象
+    std::unique_ptr<utils::Buffer> write_buffer_; // 默认值: 创建Buffer对象
+    std::unique_ptr<ProtocolHandler> protocol_handler_; // 默认值: nullptr
+    uint64_t last_activity_time_;           // 默认值: 当前时间
+    uint64_t callback_start_time_;          // 默认值: 0
+    bool in_callback_;                       // 默认值: false
+    const TimeSource* time_source_;          // 默认值: DefaultTimeSource::instance()
+    ConnectionCallback* state_callback_;     // 默认值: nullptr
 };
 
-// 连接管理器
-class ConnectionManager {
-public:
-    ConnectionManager();
-    explicit ConnectionManager(std::unique_ptr<TimeSource> time_source);
-    ~ConnectionManager();
-
-    // 禁止拷贝
-    ConnectionManager(const ConnectionManager&) = delete;
-    ConnectionManager& operator=(const ConnectionManager&) = delete;
-
-    // 创建连接
-    // fd: socket文件描述符
-    // server_port: server监听端口
-    // return: Connection指针（有效期至remove_connection调用前）
-    Connection* create_connection(int fd, uint16_t server_port);
-
-    // 获取连接
-    Connection* get_connection(uint64_t conn_id);
-    const Connection* get_connection(uint64_t conn_id) const;
-
-    // 移除连接
-    void remove_connection(uint64_t conn_id);
-
-    // 获取连接数
-    uint32_t get_connection_count() const;
-
-    // 遍历所有连接
-    void for_each_connection(std::function<void(Connection&)> func);
-
-    // 检查超时（锁内收集，锁外回调）
-    void check_timeouts(uint32_t idle_timeout_ms,
-                        uint32_t callback_timeout_ms,
-                        std::function<void(Connection&)> on_timeout);
-
-    // 清空所有连接
-    void clear_all();
-
-private:
-    uint64_t next_connection_id_;
-    std::unordered_map<uint64_t, std::unique_ptr<Connection>> connections_;
-    mutable std::mutex mutex_;
-    std::unique_ptr<TimeSource> time_source_;
-};
-
-} // namespace connection
 } // namespace https_server_sim
+
+// 文件结束

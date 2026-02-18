@@ -716,9 +716,4 @@ TEST_F(CInterfaceTest, CInterfaceCompleteFlow) {
 } // namespace test
 } // namespace https_server_sim
 
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
 // 文件结束

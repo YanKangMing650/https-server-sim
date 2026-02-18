@@ -649,13 +649,4 @@ TEST(ConfigTest, SetAndGet) {
     EXPECT_FALSE(cfg.get_http2().enabled);
 }
 
-// =============================================================================
-// 主函数
-// =============================================================================
-
-int main(int argc, char **argv) {
-    testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
 // 文件结束

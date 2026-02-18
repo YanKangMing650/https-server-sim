@@ -24,11 +24,11 @@ set(CORE_TEST_SOURCES "")
 # 添加子模块
 add_subdirectory(utils)
 # add_subdirectory(config)
-# add_subdirectory(callback)
+add_subdirectory(callback)
 # add_subdirectory(debug_chain)
-# add_subdirectory(protocol)
+add_subdirectory(protocol)
 # add_subdirectory(msg_center)
-# add_subdirectory(connection)
+add_subdirectory(connection)
 # add_subdirectory(server)
 
 # 暂不创建core库，直接编译callback
@@ -73,9 +73,12 @@ if(CORE_TEST_SOURCES)
     )
 
     # 编译core_test可执行文件
-    add_executable(core_test ${CORE_TEST_SOURCES})
+    add_executable(core_test ${CORE_TEST_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp)
     target_link_libraries(core_test
         PRIVATE
+            connection
+            protocol
+            callback
             utils
             gtest
             pthread

@@ -16,7 +16,7 @@ target_link_libraries(protocol PUBLIC utils)
 # Protocol模块测试用例
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/test_protocol.cpp)
     set(PROTOCOL_TEST_SOURCES
-        test/test_protocol.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/test_protocol.cpp
     )
     list(APPEND CORE_TEST_SOURCES ${PROTOCOL_TEST_SOURCES})
     set(CORE_TEST_SOURCES ${CORE_TEST_SOURCES} PARENT_SCOPE)
