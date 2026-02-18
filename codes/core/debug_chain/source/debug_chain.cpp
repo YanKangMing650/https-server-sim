@@ -1,9 +1,13 @@
+// HTTPS Server 模拟器 - DebugChain实现文件
+// 模块：DebugChain - 职责链管理器
+// 用途：实现DebugChain类和默认Handler
+
 #include "debug_chain/debug_chain.hpp"
 #include "debug_chain/debug_handler.hpp"
 #include "utils/logger.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cstring>
-#include <cstdlib>
 #include <thread>
 #include <chrono>
 
@@ -25,35 +29,10 @@ const char* const kDisconnectHandlerName = "DisconnectHandler";
 const char* const kLogHandlerName = "LogHandler";
 const char* const kErrorCodeHandlerName = "ErrorCodeHandler";
 
-// 返回值常量
-constexpr int kRetSuccess = 0;
-constexpr int kRetInvalidParam = -1;
-constexpr int kRetStopChain = 1;
-
 // 日志模块名称
 const char* const kLoggerName = "DebugChain";
 
 } // anonymous namespace
-
-// ========== DebugConfig实现 ==========
-
-DebugConfig::DebugConfig()
-    : enabled(false)
-    , delay_ms(0)
-    , force_disconnect(false)
-    , log_packet(false)
-    , http_status(200)
-{
-}
-
-// ========== DebugContext实现 ==========
-
-DebugContext::DebugContext()
-    : override_http_status(0)
-    , skip_callback(false)
-    , disconnect_after(false)
-{
-}
 
 // ========== DebugChain实现 ==========
 
@@ -78,13 +57,11 @@ int DebugChain::register_handler(DebugHandler* handler)
     if (handler == nullptr) {
         return kRetInvalidParam;
     }
-    // 检查handler->name非空
     if (handler->name == nullptr) {
         return kRetInvalidParam;
     }
-    // 检查是否已存在同名handler
     if (has_handler(handler->name)) {
-        return kRetInvalidParam;
+        return kRetAlreadyExists;
     }
     handlers_.push_back(handler);
     sorted_ = false;
@@ -119,10 +96,10 @@ int DebugChain::unregister_handler(const char* name)
         });
 
     if (it == handlers_.end()) {
-        return kRetInvalidParam;
+        return kRetNotFound;
     }
 
-    // 调用destroy释放handler内存（所有create_*_handler都设置了destroy）
+    // 调用destroy释放handler内存
     DebugHandler* handler = *it;
     if (handler->destroy != nullptr) {
         handler->destroy(handler);
@@ -136,77 +113,84 @@ int DebugChain::process_request(const ClientContext* ctx,
                                 const DebugConfig* config,
                                 DebugContext* debug_ctx)
 {
-    // 参数校验
+    // Debug模式下检查空指针参数（便于发现调用方错误）
+    assert(ctx != nullptr && "process_request: ctx parameter is null");
+    assert(config != nullptr && "process_request: config parameter is null");
+    assert(debug_ctx != nullptr && "process_request: debug_ctx parameter is null");
+
     if (ctx == nullptr || config == nullptr || debug_ctx == nullptr) {
-        return kRetInvalidParam;
+        return kRetContinueChain;
     }
 
-    // 检查总开关
     if (!config->enabled) {
-        return kRetSuccess;
+        return kRetContinueChain;
     }
 
-    // 排序（如需要）
     if (!sorted_) {
         sort_handlers();
     }
 
-    // 遍历执行handler
     for (auto handler : handlers_) {
         if (handler == nullptr || handler->handle_request == nullptr) {
             continue;
         }
 
         int result = handler->handle_request(handler, ctx, config, debug_ctx);
-        if (result != 0) {
-            // 非0值：终止链
+        if (result != kRetContinueChain) {
             return result;
         }
     }
 
-    return kRetSuccess;
+    return kRetContinueChain;
 }
 
 int DebugChain::process_response(const ClientContext* ctx,
                                  const DebugConfig* config,
                                  DebugContext* debug_ctx)
 {
-    // 参数校验
+    // Debug模式下检查空指针参数（便于发现调用方错误）
+    assert(ctx != nullptr && "process_response: ctx parameter is null");
+    assert(config != nullptr && "process_response: config parameter is null");
+    assert(debug_ctx != nullptr && "process_response: debug_ctx parameter is null");
+
     if (ctx == nullptr || config == nullptr || debug_ctx == nullptr) {
-        return kRetInvalidParam;
+        return kRetContinueChain;
     }
 
-    // 检查总开关
     if (!config->enabled) {
-        return kRetSuccess;
+        return kRetContinueChain;
     }
 
-    // 排序（如需要）
     if (!sorted_) {
         sort_handlers();
     }
 
-    // 遍历执行handler
     for (auto handler : handlers_) {
         if (handler == nullptr || handler->handle_response == nullptr) {
             continue;
         }
 
         int result = handler->handle_response(handler, ctx, config, debug_ctx);
-        if (result != 0) {
-            // 非0值：终止链
+        if (result != kRetContinueChain) {
             return result;
         }
     }
 
-    return kRetSuccess;
+    return kRetContinueChain;
 }
 
 void DebugChain::sort_handlers()
 {
+    // 按priority升序排序，nullptr移到末尾
     std::sort(handlers_.begin(), handlers_.end(),
         [](DebugHandler* a, DebugHandler* b) {
-            // 按priority升序排序
+            // nullptr指针优先级最低，移到末尾
+            if (a == nullptr) {
+                return false;
+            }
+            if (b == nullptr) {
+                return true;
+            }
             return a->priority < b->priority;
         });
     sorted_ = true;
@@ -226,13 +210,13 @@ static int delay_handler_handle_request(DebugHandler* self,
     (void)debug_ctx;
 
     if (config == nullptr) {
-        return kRetInvalidParam;
+        return DebugChain::kRetContinueChain;
     }
 
     if (config->delay_ms > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(config->delay_ms));
     }
-    return kRetSuccess;
+    return DebugChain::kRetContinueChain;
 }
 
 static int delay_handler_handle_response(DebugHandler* self,
@@ -245,19 +229,19 @@ static int delay_handler_handle_response(DebugHandler* self,
     (void)debug_ctx;
 
     if (config == nullptr) {
-        return kRetInvalidParam;
+        return DebugChain::kRetContinueChain;
     }
 
     if (config->delay_ms > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(config->delay_ms));
     }
-    return kRetSuccess;
+    return DebugChain::kRetContinueChain;
 }
 
 static void delay_handler_destroy(DebugHandler* self)
 {
     if (self != nullptr) {
-        std::free(self);
+        delete self;
     }
 }
 
@@ -265,7 +249,7 @@ static void delay_handler_destroy(DebugHandler* self)
 
 DebugHandler* create_delay_handler()
 {
-    DebugHandler* handler = (DebugHandler*)std::malloc(sizeof(DebugHandler));
+    DebugHandler* handler = new DebugHandler();
     if (handler == nullptr) {
         return nullptr;
     }
@@ -293,14 +277,14 @@ static int disconnect_handler_handle_request(DebugHandler* self,
     (void)ctx;
 
     if (config == nullptr || debug_ctx == nullptr) {
-        return kRetInvalidParam;
+        return DebugChain::kRetContinueChain;
     }
 
     if (config->force_disconnect) {
         debug_ctx->disconnect_after = true;
-        return kRetStopChain;
+        return DebugChain::kRetStopChain;
     }
-    return kRetSuccess;
+    return DebugChain::kRetContinueChain;
 }
 
 static int disconnect_handler_handle_response(DebugHandler* self,
@@ -312,20 +296,20 @@ static int disconnect_handler_handle_response(DebugHandler* self,
     (void)ctx;
 
     if (config == nullptr || debug_ctx == nullptr) {
-        return kRetInvalidParam;
+        return DebugChain::kRetContinueChain;
     }
 
     if (config->force_disconnect) {
         debug_ctx->disconnect_after = true;
-        return kRetStopChain;
+        return DebugChain::kRetStopChain;
     }
-    return kRetSuccess;
+    return DebugChain::kRetContinueChain;
 }
 
 static void disconnect_handler_destroy(DebugHandler* self)
 {
     if (self != nullptr) {
-        std::free(self);
+        delete self;
     }
 }
 
@@ -333,7 +317,7 @@ static void disconnect_handler_destroy(DebugHandler* self)
 
 DebugHandler* create_disconnect_handler()
 {
-    DebugHandler* handler = (DebugHandler*)std::malloc(sizeof(DebugHandler));
+    DebugHandler* handler = new DebugHandler();
     if (handler == nullptr) {
         return nullptr;
     }
@@ -361,7 +345,7 @@ static int log_handler_handle_request(DebugHandler* self,
     (void)debug_ctx;
 
     if (config == nullptr || ctx == nullptr) {
-        return kRetInvalidParam;
+        return DebugChain::kRetContinueChain;
     }
 
     if (config->log_packet) {
@@ -373,7 +357,7 @@ static int log_handler_handle_request(DebugHandler* self,
                     (unsigned int)ctx->client_port,
                     (unsigned int)ctx->server_port);
     }
-    return kRetSuccess;
+    return DebugChain::kRetContinueChain;
 }
 
 static int log_handler_handle_response(DebugHandler* self,
@@ -385,7 +369,7 @@ static int log_handler_handle_response(DebugHandler* self,
     (void)debug_ctx;
 
     if (config == nullptr || ctx == nullptr) {
-        return kRetInvalidParam;
+        return DebugChain::kRetContinueChain;
     }
 
     if (config->log_packet) {
@@ -397,13 +381,13 @@ static int log_handler_handle_response(DebugHandler* self,
                     (unsigned int)ctx->client_port,
                     (unsigned int)ctx->server_port);
     }
-    return kRetSuccess;
+    return DebugChain::kRetContinueChain;
 }
 
 static void log_handler_destroy(DebugHandler* self)
 {
     if (self != nullptr) {
-        std::free(self);
+        delete self;
     }
 }
 
@@ -411,7 +395,7 @@ static void log_handler_destroy(DebugHandler* self)
 
 DebugHandler* create_log_handler()
 {
-    DebugHandler* handler = (DebugHandler*)std::malloc(sizeof(DebugHandler));
+    DebugHandler* handler = new DebugHandler();
     if (handler == nullptr) {
         return nullptr;
     }
@@ -439,11 +423,11 @@ static int errorcode_handler_handle_request(DebugHandler* self,
     (void)ctx;
 
     if (config == nullptr || debug_ctx == nullptr) {
-        return kRetInvalidParam;
+        return DebugChain::kRetContinueChain;
     }
 
     debug_ctx->override_http_status = config->http_status;
-    return kRetSuccess;
+    return DebugChain::kRetContinueChain;
 }
 
 static int errorcode_handler_handle_response(DebugHandler* self,
@@ -455,19 +439,19 @@ static int errorcode_handler_handle_response(DebugHandler* self,
     (void)ctx;
 
     if (config == nullptr || debug_ctx == nullptr) {
-        return kRetInvalidParam;
+        return DebugChain::kRetContinueChain;
     }
 
     if (debug_ctx->override_http_status == 0) {
         debug_ctx->override_http_status = config->http_status;
     }
-    return kRetSuccess;
+    return DebugChain::kRetContinueChain;
 }
 
 static void errorcode_handler_destroy(DebugHandler* self)
 {
     if (self != nullptr) {
-        std::free(self);
+        delete self;
     }
 }
 
@@ -475,7 +459,7 @@ static void errorcode_handler_destroy(DebugHandler* self)
 
 DebugHandler* create_errorcode_handler()
 {
-    DebugHandler* handler = (DebugHandler*)std::malloc(sizeof(DebugHandler));
+    DebugHandler* handler = new DebugHandler();
     if (handler == nullptr) {
         return nullptr;
     }
@@ -515,7 +499,6 @@ DebugHandlerRegistry* debug_handler_registry_create(void)
         return nullptr;
     }
 
-    // 自动注册4个默认Handler
     registry->chain->register_handler(create_delay_handler());
     registry->chain->register_handler(create_disconnect_handler());
     registry->chain->register_handler(create_log_handler());
@@ -538,25 +521,30 @@ void debug_handler_registry_destroy(DebugHandlerRegistry* registry)
 }
 
 int debug_handler_registry_register(DebugHandlerRegistry* registry,
-                                     void* handler_void)
+                                     DebugHandler* handler)
 {
     using namespace https_server_sim::debug_chain;
 
-    if (registry == nullptr || registry->chain == nullptr || handler_void == nullptr) {
-        return kRetInvalidParam;
+    if (registry == nullptr || registry->chain == nullptr || handler == nullptr) {
+        return DEBUG_HANDLER_REGISTRY_INVALID_PARAM;
     }
 
-    DebugHandler* handler = static_cast<DebugHandler*>(handler_void);
-
     if (handler->name == nullptr) {
-        return kRetInvalidParam;
+        return DEBUG_HANDLER_REGISTRY_INVALID_PARAM;
     }
 
     if (registry->chain->has_handler(handler->name)) {
-        return kRetInvalidParam;
+        return DEBUG_HANDLER_REGISTRY_ALREADY_EXISTS;
     }
 
-    return registry->chain->register_handler(handler);
+    int ret = registry->chain->register_handler(handler);
+    if (ret == DebugChain::kRetSuccess) {
+        return DEBUG_HANDLER_REGISTRY_SUCCESS;
+    } else if (ret == DebugChain::kRetAlreadyExists) {
+        return DEBUG_HANDLER_REGISTRY_ALREADY_EXISTS;
+    } else {
+        return DEBUG_HANDLER_REGISTRY_INVALID_PARAM;
+    }
 }
 
 int debug_handler_registry_unregister(DebugHandlerRegistry* registry,
@@ -565,13 +553,20 @@ int debug_handler_registry_unregister(DebugHandlerRegistry* registry,
     using namespace https_server_sim::debug_chain;
 
     if (registry == nullptr || registry->chain == nullptr) {
-        return kRetInvalidParam;
+        return DEBUG_HANDLER_REGISTRY_INVALID_PARAM;
     }
 
-    return registry->chain->unregister_handler(name);
+    int ret = registry->chain->unregister_handler(name);
+    if (ret == DebugChain::kRetSuccess) {
+        return DEBUG_HANDLER_REGISTRY_SUCCESS;
+    } else if (ret == DebugChain::kRetNotFound) {
+        return DEBUG_HANDLER_REGISTRY_NOT_FOUND;
+    } else {
+        return DEBUG_HANDLER_REGISTRY_INVALID_PARAM;
+    }
 }
 
-void* debug_handler_registry_get_chain(DebugHandlerRegistry* registry)
+https_server_sim::debug_chain::DebugChain* debug_handler_registry_get_chain(DebugHandlerRegistry* registry)
 {
     if (registry == nullptr) {
         return nullptr;

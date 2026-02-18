@@ -1,9 +1,17 @@
+// HTTPS Server 模拟器 - DebugHandler头文件
+// 模块：DebugChain - 调测点处理器接口定义
+// 用途：定义C风格的DebugHandler结构和创建函数，供C/C++代码混合使用
+// 设计说明：
+//   - 为保持C接口兼容性，DebugHandler结构体定义在全局命名空间
+//   - 同时在https_server_sim::debug_chain命名空间提供类型别名
+//   - 这种设计与项目其他模块风格保持一致
+
 #pragma once
 
 #include <cstdint>
+#include "callback/client_context.h"
 #include "debug_chain/debug_config.hpp"
 #include "debug_chain/debug_context.hpp"
-#include "callback/client_context.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,19 +23,19 @@ struct DebugHandler;
 // 处理请求函数指针类型
 typedef int (*DebugHandlerHandleRequestFunc)(struct DebugHandler* self,
                                               const ClientContext* ctx,
-                                              const DebugConfig* config,
-                                              DebugContext* debug_ctx);
+                                              const struct DebugConfig* config,
+                                              struct DebugContext* debug_ctx);
 
 // 处理响应函数指针类型
 typedef int (*DebugHandlerHandleResponseFunc)(struct DebugHandler* self,
                                                const ClientContext* ctx,
-                                               const DebugConfig* config,
-                                               DebugContext* debug_ctx);
+                                               const struct DebugConfig* config,
+                                               struct DebugContext* debug_ctx);
 
 // 销毁函数指针类型
 typedef void (*DebugHandlerDestroyFunc)(struct DebugHandler* self);
 
-// DebugHandler结构体 - 调测点处理器C风格结构（全局命名空间，extern "C"内）
+// DebugHandler结构体 - 调测点处理器C风格结构
 struct DebugHandler {
     const char* name;                                    // 调测点名称
     int priority;                                         // 优先级（越小越先执行）
@@ -41,10 +49,14 @@ struct DebugHandler {
 }
 #endif
 
-// ========== C++命名空间内的创建函数声明 ==========
+// ========== C++命名空间内的定义 ==========
 #ifdef __cplusplus
 namespace https_server_sim {
 namespace debug_chain {
+
+// 类型别名 - 引入全局DebugHandler到命名空间
+// 这样C++代码可以使用https_server_sim::debug_chain::DebugHandler
+using DebugHandler = ::DebugHandler;
 
 // 创建DelayHandler - 延迟响应调测点
 DebugHandler* create_delay_handler();
