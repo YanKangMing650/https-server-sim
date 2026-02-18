@@ -37,9 +37,9 @@ enum class MsgCenterError : int {
 // 事件结构
 struct Event {
     EventType type;
-    uint64_t conn_id;
-    int fd;
-    void* user_data;
+    uint64_t conn_id{};
+    int fd{};
+    void* user_data{};
     std::function<void()> handler;
 
     /**

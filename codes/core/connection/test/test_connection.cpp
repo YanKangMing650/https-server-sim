@@ -81,12 +81,42 @@ public:
 
     MockProtocolHandler() : closed_(false), name_("MockProtocol") {}
 
-    const std::string& get_name() const override {
-        return name_;
+    int init(Connection* conn,
+             const protocol::CertConfig& cert_config,
+             const protocol::TlsConfig& tls_config) override {
+        (void)conn;
+        (void)cert_config;
+        (void)tls_config;
+        return 0;
+    }
+
+    int on_read() override {
+        return 0;
+    }
+
+    int on_write() override {
+        return 0;
+    }
+
+    int send_response(const uint8_t* data, uint32_t len) override {
+        (void)data;
+        (void)len;
+        return 0;
     }
 
     void close() override {
         closed_ = true;
+    }
+
+    protocol::TlsHandler* get_tls_handler() override {
+        return nullptr;
+    }
+
+    protocol::ProtocolType get_protocol_type() const override {
+        return protocol::ProtocolType::HTTP_1_1;
+    }
+
+    void reset() override {
     }
 };
 
