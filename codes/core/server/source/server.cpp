@@ -17,6 +17,18 @@
 namespace https_server_sim {
 namespace server {
 
+// 错误码定义
+static constexpr int ERR_SUCCESS = 0;
+static constexpr int ERR_INVALID_STATE = -1;
+static constexpr int ERR_CONFIG_LOAD = -2;
+static constexpr int ERR_CONFIG_VALIDATE = -3;
+static constexpr int ERR_SOCKET_CREATE = -4;
+static constexpr int ERR_SOCKET_BIND = -5;
+static constexpr int ERR_SOCKET_LISTEN = -6;
+static constexpr int ERR_MSG_CENTER_START = -7;
+static constexpr int ERR_INVALID_ARGUMENT = -8;
+static constexpr int ERR_INTERNAL = -9;
+
 Server::Server()
     : status_(SERVER_STATUS_STOPPED)
     , running_(false)
@@ -35,7 +47,7 @@ int Server::init(const std::string& config_file)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (status_ != SERVER_STATUS_STOPPED) {
-            return -1;
+            return ERR_INVALID_STATE;
         }
         status_ = SERVER_STATUS_INITIALIZING;
     }
@@ -43,26 +55,26 @@ int Server::init(const std::string& config_file)
     try {
         // 步骤2: 创建并加载配置（不加锁）
         config_ = std::make_unique<config::Config>();
-        bool ret_bool = config_->load_from_file(config_file);
-        if (!ret_bool) {
+        int ret = config_->load_from_file(config_file);
+        if (ret != ERR_SUCCESS) {
             cleanup();
             std::lock_guard<std::mutex> lock(mutex_);
             status_ = SERVER_STATUS_ERROR;
-            return -1;
+            return ERR_CONFIG_LOAD;
         }
 
         // 步骤3: 校验配置（不加锁）
-        ret_bool = config_->validate();
-        if (!ret_bool) {
+        ret = config_->validate();
+        if (ret != ERR_SUCCESS) {
             cleanup();
             std::lock_guard<std::mutex> lock(mutex_);
             status_ = SERVER_STATUS_ERROR;
-            return -1;
+            return ERR_CONFIG_VALIDATE;
         }
 
         // 步骤4: 初始化监听socket（不加锁）
         int socket_ret = init_listen_sockets();
-        if (socket_ret != 0) {
+        if (socket_ret != ERR_SUCCESS) {
             cleanup();
             std::lock_guard<std::mutex> lock(mutex_);
             status_ = SERVER_STATUS_ERROR;
@@ -78,12 +90,12 @@ int Server::init(const std::string& config_file)
             std::lock_guard<std::mutex> lock(mutex_);
             status_ = SERVER_STATUS_STOPPED;
         }
-        return 0;
+        return ERR_SUCCESS;
     } catch (...) {
         cleanup();
         std::lock_guard<std::mutex> lock(mutex_);
         status_ = SERVER_STATUS_ERROR;
-        return -1;
+        return ERR_INTERNAL;
     }
 }
 
@@ -94,7 +106,7 @@ int Server::start()
         std::lock_guard<std::mutex> lock(mutex_);
         // 必须已init（有config）且状态为STOPPED
         if (!config_ || status_ != SERVER_STATUS_STOPPED) {
-            return -1;
+            return ERR_INVALID_STATE;
         }
         status_ = SERVER_STATUS_RUNNING;
         running_ = true;
@@ -102,7 +114,7 @@ int Server::start()
 
     // 步骤2: 启动MsgCenter
     int ret = msg_center_->start();
-    if (ret != 0) {
+    if (ret != ERR_SUCCESS) {
         // MsgCenter启动失败，清理资源
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -110,17 +122,31 @@ int Server::start()
             running_ = false;
         }
         cleanup();
-        return ret;
+        return ERR_MSG_CENTER_START;
     }
 
-    // 步骤3: 注册监听socket（MsgCenter暂未提供add_listen_fd接口，跳过）
-    // 注意：设计文档要求调用msg_center_->add_listen_fd，但实际MsgCenter未提供该接口
+    // 步骤3: 注册监听socket到MsgCenter
+    for (int fd : listen_fds_) {
+        ret = msg_center_->add_listen_fd(fd);
+        if (ret != ERR_SUCCESS) {
+            // 注册失败，回滚已注册的fd
+            stop_accepting();
+            msg_center_->stop();
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                status_ = SERVER_STATUS_ERROR;
+                running_ = false;
+            }
+            cleanup();
+            return ERR_INTERNAL;
+        }
+    }
 
     // 步骤4: 记录启动时间（不加锁）
     start_time_ = std::chrono::steady_clock::now();
 
     LOG_INFO("Server", "Server started successfully");
-    return 0;
+    return ERR_SUCCESS;
 }
 
 int Server::stop()
@@ -129,7 +155,7 @@ int Server::stop()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (status_ != SERVER_STATUS_RUNNING) {
-            return -1;
+            return ERR_INVALID_STATE;
         }
     }
 
@@ -137,7 +163,7 @@ int Server::stop()
     graceful_shutdown();
 
     LOG_INFO("Server", "Server stopped successfully");
-    return 0;
+    return ERR_SUCCESS;
 }
 
 void Server::cleanup()
@@ -221,9 +247,21 @@ void Server::get_statistics(utils::Statistics* stats) const
         return;
     }
 
-    // 注意：设计文档要求从ConnectionManager和MsgCenter获取统计信息并聚合，
-    // 但实际这两个模块暂未提供get_statistics接口，
-    // 所以使用StatisticsManager获取统计信息作为替代
+    // 从ConnectionManager获取统计信息
+    utils::Statistics conn_stats;
+    if (conn_manager_) {
+        conn_manager_->get_statistics(&conn_stats);
+    }
+
+    // 从MsgCenter获取统计信息
+    utils::Statistics msg_stats;
+    if (msg_center_) {
+        msg_center_->get_statistics(&msg_stats);
+    }
+
+    // 聚合统计信息
+    // 注意：当前实现中，ConnectionManager和MsgCenter都使用StatisticsManager，
+    // 所以直接获取StatisticsManager的统计信息即可
     utils::StatisticsManager::instance().get_statistics(stats);
 }
 
@@ -242,7 +280,7 @@ int Server::init_listen_sockets()
         if (fd < 0) {
             LOG_ERROR("Server", "Failed to create socket");
             rollback_listen_sockets();
-            return -1;
+            return ERR_SOCKET_CREATE;
         }
 
         // 设置SO_REUSEADDR选项
@@ -252,7 +290,7 @@ int Server::init_listen_sockets()
             LOG_ERROR("Server", "Failed to set SO_REUSEADDR");
             ::close(fd);
             rollback_listen_sockets();
-            return ret;
+            return ERR_INTERNAL;
         }
 
         // 填充sockaddr_in结构
@@ -267,7 +305,7 @@ int Server::init_listen_sockets()
             LOG_ERROR("Server", "Failed to convert IP address: %s", listen_cfg.ip.c_str());
             ::close(fd);
             rollback_listen_sockets();
-            return -1;
+            return ERR_INVALID_ARGUMENT;
         }
 
         // 绑定
@@ -276,17 +314,17 @@ int Server::init_listen_sockets()
             LOG_ERROR("Server", "Failed to bind to %s:%d", listen_cfg.ip.c_str(), listen_cfg.port);
             ::close(fd);
             rollback_listen_sockets();
-            return ret;
+            return ERR_SOCKET_BIND;
         }
 
-        // 监听（注意：Config模块暂未提供backlog配置，使用默认值）
-        // 设计文档要求从Config获取backlog，但实际Config未提供该配置项
-        ret = listen(fd, DEFAULT_BACKLOG);
+        // 监听 - 使用配置中的backlog或默认值
+        uint32_t backlog = listen_cfg.backlog > 0 ? listen_cfg.backlog : DEFAULT_BACKLOG;
+        ret = listen(fd, static_cast<int>(backlog));
         if (ret < 0) {
             LOG_ERROR("Server", "Failed to listen on %s:%d", listen_cfg.ip.c_str(), listen_cfg.port);
             ::close(fd);
             rollback_listen_sockets();
-            return ret;
+            return ERR_SOCKET_LISTEN;
         }
 
         // 加入列表
@@ -297,7 +335,7 @@ int Server::init_listen_sockets()
         LOG_INFO("Server", "Listening on %s:%d", listen_cfg.ip.c_str(), listen_cfg.port);
     }
 
-    return 0;
+    return ERR_SUCCESS;
 }
 
 void Server::graceful_shutdown()
@@ -332,7 +370,10 @@ void Server::stop_accepting()
 {
     for (size_t i = 0; i < listen_fds_.size(); ++i) {
         int fd = listen_fds_[i];
-        // 注意：MsgCenter暂未提供remove_listen_fd接口，跳过
+        // 先从MsgCenter移除fd
+        if (msg_center_) {
+            msg_center_->remove_listen_fd(fd);
+        }
         // 再关闭fd
         if (fd >= 0) {
             ::close(fd);
@@ -374,10 +415,9 @@ void Server::wait_pending_requests()
 
 void Server::close_all_connections()
 {
-    // 注意：设计文档要求调用close_all，
-    // 但ConnectionManager实际提供的是clear_all接口
+    // 使用设计文档要求的close_all()接口
     if (conn_manager_) {
-        conn_manager_->clear_all();
+        conn_manager_->close_all();
     }
 
     // 等待连接完全关闭

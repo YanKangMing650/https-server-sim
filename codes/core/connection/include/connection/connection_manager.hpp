@@ -13,6 +13,7 @@
 #include <vector>
 #include <functional>
 #include "connection/connection.hpp"
+#include "utils/statistics.hpp"
 
 namespace https_server_sim {
 
@@ -58,6 +59,12 @@ public:
 
     // 清空所有连接
     void clear_all();
+
+    // 关闭所有连接（与clear_all功能相同，用于兼容设计文档）
+    void close_all();
+
+    // 获取统计信息
+    void get_statistics(utils::Statistics* stats) const;
 
 private:
     uint64_t next_connection_id_;

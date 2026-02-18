@@ -5,6 +5,7 @@
 //  版权: Copyright (c) 2026
 // =============================================================================
 #include "msg_center/msg_center.hpp"
+#include <algorithm>
 
 namespace https_server_sim {
 
@@ -21,12 +22,12 @@ MsgCenter::~MsgCenter() {
 int MsgCenter::start() {
     // 检查是否已在运行
     if (running_.load(std::memory_order_acquire)) {
-        return static_cast<int>(MsgCenterError::ALREADY_RUNNING);
+        return -1;
     }
 
     // 检查参数有效性
     if (io_thread_count_ == 0 || worker_thread_count_ == 0) {
-        return static_cast<int>(MsgCenterError::INVALID_PARAMETER);
+        return -2;
     }
 
     try {
@@ -65,7 +66,7 @@ int MsgCenter::start() {
         if (!event_loop_->wait_for_started(1000)) {
             // 超时，清理资源
             stop();
-            return static_cast<int>(MsgCenterError::THREAD_CREATE_FAILED);
+            return -3;
         }
 
         // 调用worker_pool_->set_post_callback_done(true)
@@ -75,11 +76,11 @@ int MsgCenter::start() {
         // 设置running_ = true
         running_.store(true, std::memory_order_release);
 
-        return static_cast<int>(MsgCenterError::SUCCESS);
+        return 0;
     } catch (const std::exception&) {
         // 清理已创建的资源
         stop();
-        return static_cast<int>(MsgCenterError::THREAD_CREATE_FAILED);
+        return -3;
     }
 }
 
@@ -132,6 +133,31 @@ void MsgCenter::post_callback_task(std::function<void()> task) {
     if (worker_pool_) {
         worker_pool_->post_task(std::move(task));
     }
+}
+
+int MsgCenter::add_listen_fd(int fd) {
+    if (fd < 0) {
+        return -1;
+    }
+    listen_fds_.push_back(fd);
+    return 0;
+}
+
+int MsgCenter::remove_listen_fd(int fd) {
+    auto it = std::find(listen_fds_.begin(), listen_fds_.end(), fd);
+    if (it != listen_fds_.end()) {
+        listen_fds_.erase(it);
+        return 0;
+    }
+    return -1;
+}
+
+void MsgCenter::get_statistics(utils::Statistics* stats) const {
+    if (stats == nullptr) {
+        return;
+    }
+    // 使用StatisticsManager获取统计信息
+    utils::StatisticsManager::instance().get_statistics(stats);
 }
 
 } // namespace https_server_sim

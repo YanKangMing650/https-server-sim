@@ -11,6 +11,7 @@
 #include "msg_center/event_loop.hpp"
 #include "msg_center/worker_pool.hpp"
 #include "msg_center/io_thread.hpp"
+#include "utils/statistics.hpp"
 #include <memory>
 #include <vector>
 #include <thread>
@@ -66,6 +67,26 @@ public:
      */
     EventLoop* get_event_loop() { return event_loop_.get(); }
 
+    /**
+     * @brief 添加监听socket到消息中心
+     * @param fd 监听socket文件描述符
+     * @return 0 表示成功，非0 表示错误码
+     */
+    int add_listen_fd(int fd);
+
+    /**
+     * @brief 从消息中心移除监听socket
+     * @param fd 监听socket文件描述符
+     * @return 0 表示成功，非0 表示错误码
+     */
+    int remove_listen_fd(int fd);
+
+    /**
+     * @brief 获取统计信息
+     * @param stats 输出参数，统计信息结构体指针
+     */
+    void get_statistics(utils::Statistics* stats) const;
+
 private:
     std::unique_ptr<EventQueue> event_queue_;
     std::unique_ptr<EventLoop> event_loop_;
@@ -73,6 +94,8 @@ private:
     std::vector<std::unique_ptr<IoThread>> io_threads_;
     std::thread event_loop_thread_;
     std::atomic<bool> running_;
+
+    std::vector<int> listen_fds_;
 
     size_t io_thread_count_;
     size_t worker_thread_count_;

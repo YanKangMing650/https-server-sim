@@ -116,6 +116,19 @@ void ConnectionManager::clear_all() {
     connections_.clear();
 }
 
+void ConnectionManager::close_all() {
+    // 与clear_all功能相同，用于兼容设计文档
+    clear_all();
+}
+
+void ConnectionManager::get_statistics(utils::Statistics* stats) const {
+    if (stats == nullptr) {
+        return;
+    }
+    // 使用StatisticsManager获取统计信息
+    utils::StatisticsManager::instance().get_statistics(stats);
+}
+
 } // namespace https_server_sim
 
 // 文件结束

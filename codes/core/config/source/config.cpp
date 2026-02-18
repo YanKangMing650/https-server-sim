@@ -8,6 +8,7 @@ ListenConfig::ListenConfig()
     : ip("0.0.0.0")
     , port(8443)
     , enabled(true)
+    , backlog(128)
 {
 }
 
@@ -66,26 +67,26 @@ Config::Config() {
 Config::~Config() {
 }
 
-bool Config::load_from_file(const std::string& config_path) {
+int Config::load_from_file(const std::string& config_path) {
     (void)config_path;
-    return true;
+    return 0;
 }
 
-bool Config::load_from_string(const std::string& json_str) {
+int Config::load_from_string(const std::string& json_str) {
     (void)json_str;
-    return true;
+    return 0;
 }
 
-bool Config::validate() const {
+int Config::validate() const {
     if (listens_.empty()) {
-        return false;
+        return -1;
     }
     for (const auto& listen : listens_) {
         if (listen.port == 0) {
-            return false;
+            return -1;
         }
     }
-    return true;
+    return 0;
 }
 
 const std::vector<ListenConfig>& Config::get_listens() const {

@@ -13,6 +13,7 @@ struct ListenConfig {
     std::string ip;
     uint16_t port;
     bool enabled;
+    uint32_t backlog;
 
     ListenConfig();
 };
@@ -89,13 +90,13 @@ public:
     ~Config();
 
     // 从JSON文件加载配置
-    bool load_from_file(const std::string& config_path);
+    int load_from_file(const std::string& config_path);
 
     // 从JSON字符串加载配置
-    bool load_from_string(const std::string& json_str);
+    int load_from_string(const std::string& json_str);
 
     // 验证配置
-    bool validate() const;
+    int validate() const;
 
     // 获取配置项
     const std::vector<ListenConfig>& get_listens() const;
