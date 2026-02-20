@@ -196,12 +196,19 @@ private:
      */
     bool is_sm2_cert() const;
 
+    /**
+     * @brief 获取配置的ALPN协议列表
+     * @return ALPN协议字符串
+     */
+    const std::string& get_alpn_protocols() const;
+
     Connection* conn_;
     // 统一使用void*避免条件编译的类型差异
     void* ssl_ctx_;
     void* ssl_;
     void* ssl_read_bio_;
     void* ssl_write_bio_;
+    bool initialized_;
     bool handshake_done_;
     utils::Buffer* read_buffer_;
     utils::Buffer* write_buffer_;
@@ -209,6 +216,7 @@ private:
     std::string key_path_;
     std::string ca_path_;
     CertType cert_type_;
+    bool use_gmssl_;
     int error_code_;
     std::string error_msg_;
     std::string alpn_protocols_;

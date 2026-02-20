@@ -356,9 +356,15 @@ TEST_F(HpackTest, EncodeDecode) {
     ret = hpack_decode(encoded.data(), encoded.size(), &decoded);
     EXPECT_EQ(ret, PROTOCOL_OK);
 
-    // 验证解码结果包含关键头部
-    // 简化实现可能对某些头部进行索引编码，不要求完全相等
-    // 只要解码成功且包含基本头部即可
+    // 验证解码结果与原始输入一致
+    EXPECT_EQ(decoded.size(), headers.size());
+    for (const auto& pair : headers) {
+        auto it = decoded.find(pair.first);
+        EXPECT_NE(it, decoded.end());
+        if (it != decoded.end()) {
+            EXPECT_EQ(it->second, pair.second);
+        }
+    }
 }
 
 TEST_F(HpackTest, EncodeDecodeWithStaticTable) {

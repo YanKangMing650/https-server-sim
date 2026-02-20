@@ -1,3 +1,9 @@
+// =============================================================================
+//  HTTPS Server Simulator - Utils Module
+//  文件: error.hpp
+//  描述: 统一错误码定义
+//  版权: Copyright (c) 2026
+// =============================================================================
 #pragma once
 
 #include <cstdint>
@@ -101,9 +107,20 @@ public:
         , has_value_(true)
     {}
 
+    // Emplace风格构造（直接构造value，避免拷贝）
+    template<typename... Args>
+    static Result ok(Args&&... args) {
+        Result result;
+        result.code_ = ErrorCode::SUCCESS;
+        new (&result.value_) T(std::forward<Args>(args)...);
+        result.has_value_ = true;
+        return result;
+    }
+
     // 失败构造
     explicit Result(ErrorCode code)
         : code_(code)
+        , message_(error_code_to_description(code))
         , value_()
         , has_value_(false)
     {}
@@ -115,9 +132,18 @@ public:
         , has_value_(false)
     {}
 
-    // 是否成功
+    Result(ErrorCode code, std::string&& message)
+        : code_(code)
+        , message_(std::move(message))
+        , value_()
+        , has_value_(false)
+    {}
+
+    // 是否成功 - 两套命名风格都支持
     bool is_ok() const { return has_value_; }
     bool is_err() const { return !has_value_; }
+    bool is_success() const { return has_value_; }
+    bool is_error() const { return !has_value_; }
 
     // 获取值（必须确保成功）
     const T& value() const { return value_; }
@@ -133,11 +159,6 @@ public:
 
     // 获取错误消息
     const std::string& error_message() const {
-        if (message_.empty() && !has_value_) {
-            static std::string desc;
-            desc = error_code_to_description(code_);
-            return desc;
-        }
         return message_;
     }
 
@@ -154,22 +175,30 @@ class Result<void> {
 public:
     Result() : code_(ErrorCode::SUCCESS) {}
 
-    explicit Result(ErrorCode code) : code_(code) {}
+    explicit Result(ErrorCode code)
+        : code_(code)
+        , message_(error_code_to_description(code))
+    {}
 
     Result(ErrorCode code, const std::string& message)
-        : code_(code), message_(message) {}
+        : code_(code)
+        , message_(message)
+    {}
 
+    Result(ErrorCode code, std::string&& message)
+        : code_(code)
+        , message_(std::move(message))
+    {}
+
+    // 是否成功 - 两套命名风格都支持
     bool is_ok() const { return code_ == ErrorCode::SUCCESS; }
     bool is_err() const { return code_ != ErrorCode::SUCCESS; }
+    bool is_success() const { return code_ == ErrorCode::SUCCESS; }
+    bool is_error() const { return code_ != ErrorCode::SUCCESS; }
 
     ErrorCode error_code() const { return code_; }
 
     const std::string& error_message() const {
-        if (message_.empty() && code_ != ErrorCode::SUCCESS) {
-            static std::string desc;
-            desc = error_code_to_description(code_);
-            return desc;
-        }
         return message_;
     }
 
@@ -204,12 +233,21 @@ Result<T> make_err(ErrorCode code, const std::string& message) {
     return Result<T>(code, message);
 }
 
+template<typename T>
+Result<T> make_err(ErrorCode code, std::string&& message) {
+    return Result<T>(code, std::move(message));
+}
+
 inline Result<void> make_err(ErrorCode code) {
     return Result<void>(code);
 }
 
 inline Result<void> make_err(ErrorCode code, const std::string& message) {
     return Result<void>(code, message);
+}
+
+inline Result<void> make_err(ErrorCode code, std::string&& message) {
+    return Result<void>(code, std::move(message));
 }
 
 } // namespace utils

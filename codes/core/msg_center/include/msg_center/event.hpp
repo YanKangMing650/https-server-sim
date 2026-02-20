@@ -26,13 +26,17 @@ enum class EventType : uint8_t {
 // Event优先级数量常量，基于EventType枚举自动计算
 constexpr size_t kEventPriorityCount = static_cast<size_t>(EventType::STATISTICS) + 1;
 
-// 错误码枚举
+// 错误码枚举（0表示成功，负数表示失败）
 enum class MsgCenterError : int {
     SUCCESS = 0,
-    ALREADY_RUNNING = 1,
-    THREAD_CREATE_FAILED = 2,
-    INVALID_PARAMETER = 3
+    ALREADY_RUNNING = -1,
+    THREAD_CREATE_FAILED = -2,
+    INVALID_PARAMETER = -3,
+    NOT_FOUND = -4
 };
+
+// MsgCenterError转字符串
+const char* msg_center_error_to_string(MsgCenterError error);
 
 // 事件结构
 struct Event {

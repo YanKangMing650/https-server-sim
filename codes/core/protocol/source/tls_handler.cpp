@@ -67,47 +67,64 @@ using UniqueEvpPkeyPtr = std::unique_ptr<EVP_PKEY, EvpPkeyDeleter>;
 static int AlpnSelectCallback(SSL* ssl, const unsigned char** out,
                                unsigned char* outlen, const unsigned char* in,
                                unsigned int inlen, void* arg) {
-    // 我们优先选择h2，其次是http/1.1
-    const unsigned char* alpn_h2 = nullptr;
-    unsigned int alpn_h2_len = 0;
-    const unsigned char* alpn_http11 = nullptr;
-    unsigned int alpn_http11_len = 0;
+    (void)ssl;
 
-    const unsigned char* ptr = in;
-    const unsigned char* end = in + inlen;
-
-    while (ptr < end) {
-        unsigned int len = *ptr++;
-        if (ptr + len > end) {
-            break;
-        }
-
-        // 检查是否是h2
-        if (len == 2 && memcmp(ptr, "h2", 2) == 0) {
-            alpn_h2 = ptr;
-            alpn_h2_len = len;
-        }
-        // 检查是否是http/1.1
-        else if (len == 8 && memcmp(ptr, "http/1.1", 8) == 0) {
-            alpn_http11 = ptr;
-            alpn_http11_len = len;
-        }
-
-        ptr += len;
+    // 获取TlsHandler实例
+    TlsHandler* handler = static_cast<TlsHandler*>(arg);
+    if (!handler) {
+        return SSL_TLSEXT_ERR_NOACK;
     }
 
-    // 优先选择h2
-    if (alpn_h2) {
-        *out = alpn_h2;
-        *outlen = alpn_h2_len;
-        return SSL_TLSEXT_ERR_OK;
+    // 解析服务器配置的ALPN协议列表（格式: "h2,http/1.1"）
+    const std::string& server_alpn = handler->get_alpn_protocols();
+
+    // 我们优先按服务器配置的顺序选择
+    // 首先解析服务器支持的协议列表
+    std::vector<std::string> server_protocols;
+    size_t pos = 0;
+    while (pos < server_alpn.size()) {
+        size_t comma = server_alpn.find(',', pos);
+        if (comma == std::string::npos) {
+            comma = server_alpn.size();
+        }
+        std::string proto = server_alpn.substr(pos, comma - pos);
+        // 去除首尾空格
+        size_t start = proto.find_first_not_of(" \t");
+        size_t end = proto.find_last_not_of(" \t");
+        if (start != std::string::npos && end != std::string::npos && start <= end) {
+            std::string trimmed = proto.substr(start, end - start + 1);
+            // 跳过空字符串
+            if (!trimmed.empty()) {
+                server_protocols.push_back(std::move(trimmed));
+            }
+        }
+        pos = comma + 1;
     }
 
-    // 其次选择http/1.1
-    if (alpn_http11) {
-        *out = alpn_http11;
-        *outlen = alpn_http11_len;
-        return SSL_TLSEXT_ERR_OK;
+    // 如果没有有效的协议，直接返回
+    if (server_protocols.empty()) {
+        return SSL_TLSEXT_ERR_NOACK;
+    }
+
+    // 遍历客户端支持的协议，按服务器配置的优先级选择
+    const unsigned char* client_end = in + inlen;
+
+    // 按服务器配置的优先级查找
+    for (const auto& server_proto : server_protocols) {
+        const unsigned char* client_ptr = in;
+        while (client_ptr < client_end) {
+            unsigned int len = *client_ptr++;
+            if (client_ptr + len > client_end) {
+                break;
+            }
+            if (len == server_proto.size() &&
+                memcmp(client_ptr, server_proto.data(), len) == 0) {
+                *out = client_ptr;
+                *outlen = len;
+                return SSL_TLSEXT_ERR_OK;
+            }
+            client_ptr += len;
+        }
     }
 
     // 没有匹配的协议
@@ -124,6 +141,7 @@ TlsHandler::TlsHandler()
     , ssl_(nullptr)
     , ssl_read_bio_(nullptr)
     , ssl_write_bio_(nullptr)
+    , initialized_(false)
     , handshake_done_(false)
     , read_buffer_(nullptr)
     , write_buffer_(nullptr)
@@ -131,10 +149,16 @@ TlsHandler::TlsHandler()
     , key_path_()
     , ca_path_()
     , cert_type_(CertType::RSA)
+    , use_gmssl_(false)
     , error_code_(0)
     , error_msg_()
     , alpn_protocols_("h2,http/1.1")
 {
+    // 标记条件编译下可能未使用的字段
+    (void)ssl_ctx_;
+    (void)ssl_;
+    (void)ssl_read_bio_;
+    (void)ssl_write_bio_;
 }
 
 TlsHandler::~TlsHandler() {
@@ -145,6 +169,9 @@ int TlsHandler::init(Connection* conn,
                      const CertConfig& cert_config,
                      const TlsConfig& tls_config) {
     conn_ = conn;
+
+    // 保存国密配置标志
+    use_gmssl_ = cert_config.use_gmssl;
 
     if (!tls_config.alpn_protocols.empty()) {
         alpn_protocols_ = tls_config.alpn_protocols;
@@ -202,10 +229,17 @@ int TlsHandler::init(Connection* conn,
     SSL_set_accept_state(static_cast<SSL*>(ssl_));
 #endif // HAVE_OPENSSL
 
+    initialized_ = true;
     return PROTOCOL_OK;
 }
 
 int TlsHandler::read(uint8_t* data, size_t len, size_t* out_len) {
+    // 检查初始化状态
+    if (!initialized_) {
+        set_error(PROTOCOL_ERROR_INVALID, "TlsHandler not initialized");
+        return PROTOCOL_ERROR_INVALID;
+    }
+
     if (out_len == nullptr) {
         set_error(PROTOCOL_ERROR_INVALID, "out_len is null");
         return PROTOCOL_ERROR_INVALID;
@@ -256,6 +290,12 @@ int TlsHandler::read(uint8_t* data, size_t len, size_t* out_len) {
 }
 
 int TlsHandler::write(const uint8_t* data, size_t len, size_t* out_len) {
+    // 检查初始化状态
+    if (!initialized_) {
+        set_error(PROTOCOL_ERROR_INVALID, "TlsHandler not initialized");
+        return PROTOCOL_ERROR_INVALID;
+    }
+
     if (out_len == nullptr) {
         set_error(PROTOCOL_ERROR_INVALID, "out_len is null");
         return PROTOCOL_ERROR_INVALID;
@@ -307,6 +347,12 @@ int TlsHandler::write(const uint8_t* data, size_t len, size_t* out_len) {
 }
 
 int TlsHandler::continue_handshake() {
+    // 检查初始化状态
+    if (!initialized_) {
+        set_error(PROTOCOL_ERROR_INVALID, "TlsHandler not initialized");
+        return PROTOCOL_ERROR_INVALID;
+    }
+
 #if HAVE_OPENSSL
     if (!ssl_) {
         set_error(PROTOCOL_ERROR_INVALID, "SSL not initialized");
@@ -379,15 +425,36 @@ int TlsHandler::shutdown() {
         return PROTOCOL_OK;
     }
 
-    // 尝试优雅关闭
-    int ret = SSL_shutdown(static_cast<SSL*>(ssl_));
-    if (ret == 0) {
-        // 需要先调用pump_write_bio()发送close_notify
-        pump_write_bio();
-        // 再次调用SSL_shutdown()
+    // 尝试优雅关闭 - 使用循环处理双向关闭
+    int retry_count = 0;
+    const int MAX_RETRIES = 2;
+    int ret = 0;
+
+    // SSL_shutdown可能需要调用多次来完成双向关闭
+    while (retry_count < MAX_RETRIES) {
         ret = SSL_shutdown(static_cast<SSL*>(ssl_));
+        if (ret == 1) {
+            // 关闭成功完成
+            break;
+        }
+        if (ret == 0) {
+            // 需要继续处理：发送数据并再次尝试
+            pump_write_bio();
+            retry_count++;
+            continue;
+        }
+        // ret < 0: 检查错误类型
+        int err = SSL_get_error(static_cast<SSL*>(ssl_), ret);
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+            pump_write_bio();
+            retry_count++;
+            continue;
+        }
+        // 其他错误：记录但继续，因为我们正在关闭
+        break;
     }
 
+    // 最后确保发送所有待处理数据
     pump_write_bio();
 #endif
 
@@ -408,6 +475,7 @@ int TlsHandler::close() {
     ssl_write_bio_ = nullptr;
 #endif
 
+    initialized_ = false;
     handshake_done_ = false;
     error_code_ = 0;
     error_msg_.clear();
@@ -468,9 +536,7 @@ int TlsHandler::init_ssl_context(const CertConfig& config) {
 }
 
 int TlsHandler::load_certificates(const CertConfig& config) {
-    cert_path_ = config.cert_path;
-    key_path_ = config.key_path;
-    ca_path_ = config.ca_path;
+    // 注意：cert_path_、key_path_、ca_path_已在init()中设置，避免重复赋值
 
     // 如果证书路径为空，我们不尝试加载（测试场景）
     if (cert_path_.empty() || key_path_.empty()) {
@@ -563,7 +629,19 @@ int TlsHandler::configure_cipher_suites(const TlsConfig& config) {
         return PROTOCOL_ERROR_INVALID;
     }
 
-    if (!config.cipher_suites.empty()) {
+    // 检查是否使用国密（优先使用配置标志，其次根据证书类型判断）
+    if (use_gmssl_ || cert_type_ == CertType::SM2) {
+        // 配置国密SM2/SM3/SM4套件
+        const char* gm_ciphers = "SM2-WITH-SMS4-SM3";
+        if (SSL_CTX_set_cipher_list(static_cast<SSL_CTX*>(ssl_ctx_), gm_ciphers) != 1) {
+            set_error(PROTOCOL_ERROR_TLS, "Failed to set GMSSL cipher list");
+            return PROTOCOL_ERROR_TLS;
+        }
+        // 国密主要使用TLS 1.2
+#ifdef SSL_OP_NO_TLSv1_3
+        SSL_CTX_set_options(static_cast<SSL_CTX*>(ssl_ctx_), SSL_OP_NO_TLSv1_3);
+#endif
+    } else if (!config.cipher_suites.empty()) {
         // 使用用户指定的加密套件
         if (SSL_CTX_set_cipher_list(static_cast<SSL_CTX*>(ssl_ctx_), config.cipher_suites.c_str()) != 1) {
             set_error(PROTOCOL_ERROR_TLS, "Failed to set cipher list");
@@ -605,6 +683,10 @@ int TlsHandler::configure_alpn() {
 
     // 设置ALPN选择回调
     SSL_CTX_set_alpn_select_cb(static_cast<SSL_CTX*>(ssl_ctx_), AlpnSelectCallback, this);
+
+    // 注意：在服务器端，我们不需要调用 SSL_CTX_set_alpn_protos
+    // 服务器端是通过回调函数 AlpnSelectCallback 来选择协议的
+    // 我们的回调函数已经支持从 alpn_protocols_ 中选择合适的协议
 
     return PROTOCOL_OK;
 }
@@ -766,6 +848,10 @@ int TlsHandler::pump_write_bio() {
 
 bool TlsHandler::is_sm2_cert() const {
     return cert_type_ == CertType::SM2;
+}
+
+const std::string& TlsHandler::get_alpn_protocols() const {
+    return alpn_protocols_;
 }
 
 } // namespace protocol

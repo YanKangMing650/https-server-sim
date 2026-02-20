@@ -22,6 +22,7 @@ class Connection;
 using ProtocolHandler = protocol::ProtocolHandler;
 
 // 连接状态枚举
+// 注意：枚举值从1开始而非0，是为了避免默认初始化的0值与有效状态混淆
 enum class ConnectionState : uint8_t {
     ACCEPTING = 1,          // 新接受连接，等待TLS握手
     TLS_HANDSHAKING = 2,    // TLS握手进行中
@@ -178,6 +179,9 @@ public:
 private:
     // 检查状态转换是否合法
     bool is_valid_state_transition(ConnectionState from, ConnectionState to) const;
+
+    // 关闭文件描述符（内部使用）
+    void close_fd();
 
     // 友元测试类，用于直接测试private方法
     friend class ConnectionTest_IsValidStateTransition_Test;

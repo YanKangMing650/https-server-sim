@@ -71,8 +71,17 @@ public:
      * @brief 添加监听socket到消息中心
      * @param fd 监听socket文件描述符
      * @return 0 表示成功，非0 表示错误码
+     * @deprecated 请使用 add_listen_fd(int fd, uint16_t port) 代替
      */
     int add_listen_fd(int fd);
+
+    /**
+     * @brief 添加监听socket到消息中心
+     * @param fd 监听socket文件描述符
+     * @param port 监听端口
+     * @return 0 表示成功，非0 表示错误码
+     */
+    int add_listen_fd(int fd, uint16_t port);
 
     /**
      * @brief 从消息中心移除监听socket
@@ -88,14 +97,16 @@ public:
     void get_statistics(utils::Statistics* stats) const;
 
 private:
-    std::unique_ptr<EventQueue> event_queue_;
-    std::unique_ptr<EventLoop> event_loop_;
+    std::shared_ptr<EventQueue> event_queue_;
+    std::shared_ptr<EventLoop> event_loop_;
     std::unique_ptr<WorkerPool> worker_pool_;
     std::vector<std::unique_ptr<IoThread>> io_threads_;
     std::thread event_loop_thread_;
     std::atomic<bool> running_;
 
     std::vector<int> listen_fds_;
+    mutable std::mutex listen_fds_mutex_;
+    mutable std::mutex post_mutex_;
 
     size_t io_thread_count_;
     size_t worker_thread_count_;

@@ -48,7 +48,8 @@ void EventLoop::stop() {
     running_.store(false, std::memory_order_release);
 
     if (event_queue_) {
-        event_queue_->push(Event::make_shutdown_event());
+        // 尝试推送SHUTDOWN事件，即使push失败也继续调用wake_up确保线程被唤醒
+        (void)event_queue_->push(Event::make_shutdown_event());
         event_queue_->wake_up();
     }
 }

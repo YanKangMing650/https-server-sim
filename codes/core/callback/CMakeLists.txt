@@ -7,7 +7,6 @@ set(CALLBACK_SOURCES
 set(CALLBACK_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/callback/client_context.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/callback/callback.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/callback/callback.hpp
 )
 
 add_library(callback STATIC ${CALLBACK_SOURCES} ${CALLBACK_HEADERS})

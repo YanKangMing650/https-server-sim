@@ -35,7 +35,11 @@ void StatisticsManager::record_connection() {
 }
 
 void StatisticsManager::record_connection_close() {
-    current_connections_.fetch_sub(1, std::memory_order_relaxed);
+    uint32_t current = current_connections_.load(std::memory_order_relaxed);
+    while (current > 0 && !current_connections_.compare_exchange_weak(
+        current, current - 1, std::memory_order_relaxed)) {
+        // 重试，直到成功或 current 变为 0
+    }
 }
 
 void StatisticsManager::record_request() {
@@ -144,9 +148,14 @@ void StatisticsManager::calculate_percentiles() {
 
     // 百分位
     size_t n = sorted.size();
-    p50_latency_ms_ = sorted[n * 50 / 100];
-    p95_latency_ms_ = sorted[n * 95 / 100];
-    p99_latency_ms_ = sorted[n * 99 / 100];
+    // 使用标准百分位计算方法：(n - 1) * P / 100
+    // 确保索引范围在 [0, n-1] 之间
+    size_t idx_p50 = static_cast<size_t>((n - 1) * 50 / 100);
+    size_t idx_p95 = static_cast<size_t>((n - 1) * 95 / 100);
+    size_t idx_p99 = static_cast<size_t>((n - 1) * 99 / 100);
+    p50_latency_ms_ = sorted[idx_p50];
+    p95_latency_ms_ = sorted[idx_p95];
+    p99_latency_ms_ = sorted[idx_p99];
 }
 
 } // namespace utils

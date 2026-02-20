@@ -5,9 +5,28 @@
 //  版权: Copyright (c) 2026
 // =============================================================================
 #include "msg_center/msg_center.hpp"
+#include "utils/logger.hpp"
 #include <algorithm>
 
 namespace https_server_sim {
+
+// MsgCenterError转字符串函数实现
+const char* msg_center_error_to_string(MsgCenterError error) {
+    switch (error) {
+        case MsgCenterError::SUCCESS:
+            return "SUCCESS";
+        case MsgCenterError::ALREADY_RUNNING:
+            return "ALREADY_RUNNING";
+        case MsgCenterError::THREAD_CREATE_FAILED:
+            return "THREAD_CREATE_FAILED";
+        case MsgCenterError::INVALID_PARAMETER:
+            return "INVALID_PARAMETER";
+        case MsgCenterError::NOT_FOUND:
+            return "NOT_FOUND";
+        default:
+            return "UNKNOWN_ERROR";
+    }
+}
 
 MsgCenter::MsgCenter(size_t io_thread_count, size_t worker_thread_count)
     : running_(false)
@@ -32,10 +51,10 @@ int MsgCenter::start() {
 
     try {
         // 创建EventQueue
-        event_queue_ = std::make_unique<EventQueue>();
+        event_queue_ = std::make_shared<EventQueue>();
 
         // 创建EventLoop（传入EventQueue指针）
-        event_loop_ = std::make_unique<EventLoop>(event_queue_.get());
+        event_loop_ = std::make_shared<EventLoop>(event_queue_.get());
 
         // 创建WorkerPool（传入worker_thread_count_和EventLoop指针）
         // WorkerPool构造时post_callback_done_默认为false
@@ -89,7 +108,15 @@ void MsgCenter::stop() {
         return;
     }
 
+    // 加锁保护，与post_event()互斥
+    std::lock_guard<std::mutex> lock(post_mutex_);
+
     running_.store(false, std::memory_order_release);
+
+    // 先停止WorkerPool，确保WorkerPool的回调完成事件能被EventLoop处理
+    if (worker_pool_) {
+        worker_pool_->stop();
+    }
 
     // 停止EventLoop
     if (event_loop_) {
@@ -99,11 +126,6 @@ void MsgCenter::stop() {
     // 等待EventLoop线程结束
     if (event_loop_thread_.joinable()) {
         event_loop_thread_.join();
-    }
-
-    // 停止WorkerPool
-    if (worker_pool_) {
-        worker_pool_->stop();
     }
 
     // 停止所有IoThread
@@ -121,7 +143,15 @@ void MsgCenter::stop() {
 }
 
 void MsgCenter::post_event(const Event& event) {
-    // 统一投递路径：优先通过event_loop_投递，否则直接投递到event_queue_
+    // 加锁保护，防止与stop()中的reset操作产生竞态
+    std::lock_guard<std::mutex> lock(post_mutex_);
+
+    // 检查运行状态，非运行状态下不投递事件
+    if (!running_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    // 投递路径：优先通过event_loop_投递，否则直接投递到event_queue_
     if (event_loop_) {
         event_loop_->post_event(event);
     } else if (event_queue_) {
@@ -132,24 +162,65 @@ void MsgCenter::post_event(const Event& event) {
 void MsgCenter::post_callback_task(std::function<void()> task) {
     if (worker_pool_) {
         worker_pool_->post_task(std::move(task));
+    } else {
+        // worker_pool_ 为 nullptr 时记录错误日志
+        LOG_ERROR("MsgCenter", "post_callback_task called but worker_pool_ is null, task dropped");
     }
 }
 
 int MsgCenter::add_listen_fd(int fd) {
+    return add_listen_fd(fd, 0);
+}
+
+int MsgCenter::add_listen_fd(int fd, uint16_t port) {
     if (fd < 0) {
         return static_cast<int>(MsgCenterError::INVALID_PARAMETER);
     }
-    listen_fds_.push_back(fd);
+
+    // 维护内部列表（加锁保护）
+    {
+        std::lock_guard<std::mutex> lock(listen_fds_mutex_);
+        auto it = std::find(listen_fds_.begin(), listen_fds_.end(), fd);
+        if (it == listen_fds_.end()) {
+            listen_fds_.push_back(fd);
+        }
+    }
+
+    // 将fd添加到所有IoThread中（MC-002修复）
+    for (auto& io_thread : io_threads_) {
+        if (io_thread) {
+            io_thread->add_listen_fd(fd, port);
+        }
+    }
+
     return static_cast<int>(MsgCenterError::SUCCESS);
 }
 
 int MsgCenter::remove_listen_fd(int fd) {
-    auto it = std::find(listen_fds_.begin(), listen_fds_.end(), fd);
-    if (it != listen_fds_.end()) {
-        listen_fds_.erase(it);
-        return static_cast<int>(MsgCenterError::SUCCESS);
+    bool existed = false;
+    // 从内部列表移除（加锁保护）
+    {
+        std::lock_guard<std::mutex> lock(listen_fds_mutex_);
+        auto it = std::find(listen_fds_.begin(), listen_fds_.end(), fd);
+        if (it != listen_fds_.end()) {
+            listen_fds_.erase(it);
+            existed = true;
+        }
     }
-    return static_cast<int>(MsgCenterError::INVALID_PARAMETER);
+
+    // 从所有IoThread中移除fd（MC-002修复）
+    for (auto& io_thread : io_threads_) {
+        if (io_thread) {
+            io_thread->remove_fd(fd);
+        }
+    }
+
+    // 根据fd是否在内部列表中返回不同结果
+    if (existed) {
+        return static_cast<int>(MsgCenterError::SUCCESS);
+    } else {
+        return static_cast<int>(MsgCenterError::NOT_FOUND);
+    }
 }
 
 void MsgCenter::get_statistics(utils::Statistics* stats) const {

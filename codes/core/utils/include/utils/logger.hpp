@@ -1,3 +1,9 @@
+// =============================================================================
+//  HTTPS Server Simulator - Utils Module
+//  文件: logger.hpp
+//  描述: 日志系统类定义
+//  版权: Copyright (c) 2026
+// =============================================================================
 #pragma once
 
 #include <cstdint>
@@ -114,6 +120,11 @@ private:
 } // namespace https_server_sim
 
 // ========== 便捷宏 ==========
+// 抑制关于 ##__VA_ARGS__ 的编译器警告（这是广泛使用的标准扩展）
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+#endif
 
 #define LOG_DEBUG(module, fmt, ...) \
     do { \
@@ -146,3 +157,9 @@ private:
             logger.error(module, fmt, ##__VA_ARGS__); \
         } \
     } while(0)
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+
+// 文件结束

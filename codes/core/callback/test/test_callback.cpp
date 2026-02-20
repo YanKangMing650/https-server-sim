@@ -5,7 +5,6 @@
 //  版权: Copyright (c) 2026
 // =============================================================================
 #include <gtest/gtest.h>
-#include "callback/callback.hpp"
 #include "callback/callback.h"
 #include <thread>
 #include <vector>
@@ -14,7 +13,7 @@
 namespace https_server_sim {
 namespace test {
 
-// ==================== 测试辅助变量（用于避免滥用token字段） ====================
+// ==================== 测试辅助变量（用于避免滥用token字段）====================
 // 全局测试指针，用于死锁测试中传递manager指针
 static CallbackStrategyManager* g_test_manager = nullptr;
 
@@ -210,7 +209,7 @@ TEST_F(CallbackStrategyManagerTest, GetRegisteredPort) {
 
     manager_->register_callback(&strategy);
 
-    const CallbackStrategy* retrieved = manager_->get_callback(8443);
+    auto retrieved = manager_->get_callback(8443);
     ASSERT_NE(retrieved, nullptr);
     EXPECT_EQ(retrieved->port, 8443);
     EXPECT_STREQ(retrieved->name, "TestStrategy");
@@ -219,7 +218,7 @@ TEST_F(CallbackStrategyManagerTest, GetRegisteredPort) {
 // Callback_UC010: 查询未注册端口
 // 用例编号: Callback_UC010
 TEST_F(CallbackStrategyManagerTest, GetUnregisteredPort) {
-    const CallbackStrategy* retrieved = manager_->get_callback(9999);
+    auto retrieved = manager_->get_callback(9999);
     EXPECT_EQ(retrieved, nullptr);
 }
 
@@ -299,7 +298,7 @@ TEST_F(CallbackStrategyManagerTest, RegisterMultiplePorts) {
     EXPECT_EQ(manager_->get_callback_count(), 10u);
 
     for (uint16_t port = 8001; port <= 8010; ++port) {
-        const CallbackStrategy* s = manager_->get_callback(port);
+        auto s = manager_->get_callback(port);
         EXPECT_NE(s, nullptr);
         EXPECT_EQ(s->port, port);
     }
@@ -668,6 +667,47 @@ TEST_F(CallbackStrategyManagerTest, MultithreadedCallbackInvoke) {
     }
 
     EXPECT_EQ(invoke_success_count.load(), thread_count * invokes_per_thread);
+}
+
+// 新增测试用例：验证get_callback返回shared_ptr的安全性（策略注销后仍可访问）
+// 用例编号: Callback_UC022（修复问题验证用例）
+TEST_F(CallbackStrategyManagerTest, SafeAccessAfterDeregister) {
+    CallbackStrategy strategy;
+    strategy.name = "SafeAccessTest";
+    strategy.port = 8443;
+    strategy.parse = test_parse_func;
+    strategy.reply = test_reply_func;
+    manager_->register_callback(&strategy);
+
+    // 获取shared_ptr
+    auto strategy_ptr = manager_->get_callback(8443);
+    ASSERT_NE(strategy_ptr, nullptr);
+
+    // 注销该策略
+    int ret = manager_->deregister_callback(8443);
+    EXPECT_EQ(ret, CALLBACK_SUCCESS);
+    EXPECT_EQ(manager_->get_callback_count(), 0u);
+
+    // 验证从manager中已无法获取
+    auto not_found = manager_->get_callback(8443);
+    EXPECT_EQ(not_found, nullptr);
+
+    // 关键验证：即使已注销，我们持有的shared_ptr仍然有效
+    EXPECT_EQ(strategy_ptr->port, 8443);
+    EXPECT_STREQ(strategy_ptr->name, "SafeAccessTest");
+    EXPECT_EQ(strategy_ptr->parse, test_parse_func);
+    EXPECT_EQ(strategy_ptr->reply, test_reply_func);
+
+    // 还可以正常调用回调函数
+    ClientContext ctx;
+    ctx.connection_id = 123;
+    ctx.client_ip = "127.0.0.1";
+    ctx.client_port = 12345;
+    ctx.server_port = 8443;
+    ctx.token = nullptr;
+
+    uint32_t result = strategy_ptr->parse(&ctx, nullptr, 0);
+    EXPECT_EQ(result, 12345u);
 }
 
 // ==================== C接口测试 ====================

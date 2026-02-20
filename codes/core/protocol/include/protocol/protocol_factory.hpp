@@ -34,6 +34,14 @@ public:
     ProtocolHandler* create_handler(ProtocolType type);
 
     /**
+     * @brief 创建协议处理器（设计文档要求的签名）
+     * @param type 协议类型
+     * @param conn Connection指针
+     * @return ProtocolHandler指针，失败返回nullptr
+     */
+    ProtocolHandler* create_handler(ProtocolType type, Connection* conn);
+
+    /**
      * @brief 销毁协议处理器
      * @param handler 处理器指针
      */

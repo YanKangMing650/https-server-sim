@@ -76,22 +76,29 @@ public:
     bool empty() const;
 
 private:
-    struct Node {
-        T data;
-        std::atomic<Node*> next;
-        Node(T d) : data(std::move(d)), next(nullptr) {}
+    // 节点基类（用于哨兵节点，不包含数据）
+    struct NodeBase {
+        std::atomic<NodeBase*> next;
+        NodeBase() : next(nullptr) {}
+        virtual ~NodeBase() = default;
     };
 
-    std::atomic<Node*> head_;
-    std::atomic<Node*> tail_;
+    // 数据节点（包含实际数据）
+    struct Node : NodeBase {
+        T data;
+        Node(T d) : NodeBase(), data(std::move(d)) {}
+    };
+
+    std::atomic<NodeBase*> head_;
+    std::atomic<NodeBase*> tail_;
 };
 
 // ========== 实现 ==========
 
 template<typename T>
 LockFreeQueue<T>::LockFreeQueue() {
-    // 初始哨兵节点
-    Node* dummy = new Node(T{});
+    // 初始哨兵节点（使用基类，不要求T可默认构造）
+    NodeBase* dummy = new NodeBase();
     head_.store(dummy, std::memory_order_relaxed);
     tail_.store(dummy, std::memory_order_relaxed);
 }
@@ -99,9 +106,11 @@ LockFreeQueue<T>::LockFreeQueue() {
 template<typename T>
 LockFreeQueue<T>::~LockFreeQueue() {
     // 删除所有节点（仅单线程调用析构，无竞争）
-    Node* curr = head_.load(std::memory_order_relaxed);
+    NodeBase* curr = head_.load(std::memory_order_relaxed);
     while (curr != nullptr) {
-        Node* next = curr->next.load(std::memory_order_relaxed);
+        NodeBase* next = curr->next.load(std::memory_order_relaxed);
+        // 注意：只有数据节点是Node*类型，哨兵节点是NodeBase*
+        // 但我们统一用NodeBase*删除，因为析构函数是平凡的
         delete curr;
         curr = next;
     }
@@ -110,25 +119,31 @@ LockFreeQueue<T>::~LockFreeQueue() {
 template<typename T>
 void LockFreeQueue<T>::push(T item) {
     Node* new_node = new Node(std::move(item));
+    new_node->next.store(nullptr, std::memory_order_relaxed);
 
-    // 发布节点：原子交换tail
-    Node* old_tail = tail_.exchange(new_node, std::memory_order_acq_rel);
+    // SPSC正确顺序：
+    // 1. 先获取当前tail
+    NodeBase* old_tail = tail_.load(std::memory_order_relaxed);
 
-    // 链接到链表
+    // 2. 关键：先链接old_tail->next（release保证后续操作可见）
     old_tail->next.store(new_node, std::memory_order_release);
+
+    // 3. 再更新tail（relaxed，因为只有生产者线程修改）
+    tail_.store(new_node, std::memory_order_relaxed);
 }
 
 template<typename T>
 bool LockFreeQueue<T>::pop(T& item) {
-    Node* old_head = head_.load(std::memory_order_relaxed);
-    Node* next = old_head->next.load(std::memory_order_acquire);
+    NodeBase* old_head = head_.load(std::memory_order_relaxed);
+    NodeBase* next = old_head->next.load(std::memory_order_acquire);
 
     if (next == nullptr) {
         return false;
     }
 
-    // 取出数据
-    item = std::move(next->data);
+    // 取出数据（next是数据节点，安全转换为Node*）
+    Node* data_node = static_cast<Node*>(next);
+    item = std::move(data_node->data);
 
     // 更新head，释放old_head
     head_.store(next, std::memory_order_release);
@@ -154,9 +169,12 @@ void LockFreeQueue<T>::push_batch(InputIt first, InputIt last) {
         batch_tail = new_node;
     }
 
-    // 原子交换到主队列
-    Node* old_tail = tail_.exchange(batch_tail, std::memory_order_acq_rel);
+    batch_tail->next.store(nullptr, std::memory_order_relaxed);
+
+    // SPSC正确顺序：先链接，再更新tail
+    NodeBase* old_tail = tail_.load(std::memory_order_relaxed);
     old_tail->next.store(batch_head, std::memory_order_release);
+    tail_.store(batch_tail, std::memory_order_relaxed);
 }
 
 template<typename T>
@@ -176,9 +194,12 @@ void LockFreeQueue<T>::push_batch_move(InputIt first, InputIt last) {
         batch_tail = new_node;
     }
 
-    // 原子交换到主队列
-    Node* old_tail = tail_.exchange(batch_tail, std::memory_order_acq_rel);
+    batch_tail->next.store(nullptr, std::memory_order_relaxed);
+
+    // SPSC正确顺序：先链接，再更新tail
+    NodeBase* old_tail = tail_.load(std::memory_order_relaxed);
     old_tail->next.store(batch_head, std::memory_order_release);
+    tail_.store(batch_tail, std::memory_order_relaxed);
 }
 
 template<typename T>
@@ -202,9 +223,12 @@ void LockFreeQueue<T>::push_batch(std::vector<T>&& items) {
         batch_tail = new_node;
     }
 
-    // 原子交换到主队列
-    Node* old_tail = tail_.exchange(batch_tail, std::memory_order_acq_rel);
+    batch_tail->next.store(nullptr, std::memory_order_relaxed);
+
+    // SPSC正确顺序：先链接，再更新tail
+    NodeBase* old_tail = tail_.load(std::memory_order_relaxed);
     old_tail->next.store(batch_head, std::memory_order_release);
+    tail_.store(batch_tail, std::memory_order_relaxed);
 }
 
 template<typename T>
@@ -219,16 +243,16 @@ template<typename T>
 size_t LockFreeQueue<T>::pop_batch(std::vector<T>& out, size_t max_count) {
     size_t count = 0;
 
-    Node* old_head = head_.load(std::memory_order_relaxed);
-    Node* first_data_node = nullptr;
-    Node* last_data_node = nullptr;
+    NodeBase* old_head = head_.load(std::memory_order_relaxed);
+    NodeBase* first_data_node = nullptr;
+    NodeBase* last_data_node = nullptr;
 
     // ========== 第一阶段：遍历链表收集数据（不释放内存） ==========
     // 注意：在SPSC场景下，此时只有消费者线程在读next指针
     // 生产者可能在追加新节点，但不会修改已存在节点的next指针
-    Node* curr = old_head;
+    NodeBase* curr = old_head;
     while (count < max_count) {
-        Node* next = curr->next.load(std::memory_order_acquire);
+        NodeBase* next = curr->next.load(std::memory_order_acquire);
         if (next == nullptr) {
             break;  // 队列已空
         }
@@ -239,8 +263,9 @@ size_t LockFreeQueue<T>::pop_batch(std::vector<T>& out, size_t max_count) {
         }
         last_data_node = next;
 
-        // 取出数据
-        out.push_back(std::move(next->data));
+        // 取出数据（next是数据节点，安全转换为Node*）
+        Node* data_node = static_cast<Node*>(next);
+        out.push_back(std::move(data_node->data));
         curr = next;
         ++count;
     }
@@ -253,9 +278,9 @@ size_t LockFreeQueue<T>::pop_batch(std::vector<T>& out, size_t max_count) {
         // 批量释放旧节点：从old_head到first_data_node之前的节点
         // 注意：old_head是原哨兵节点，first_data_node是第一个数据节点
         // 释放流程：old_head -> ... -> first_data_node的前一个节点
-        Node* node_to_delete = old_head;
+        NodeBase* node_to_delete = old_head;
         while (node_to_delete != last_data_node) {
-            Node* next_node = node_to_delete->next.load(std::memory_order_relaxed);
+            NodeBase* next_node = node_to_delete->next.load(std::memory_order_relaxed);
             delete node_to_delete;
             node_to_delete = next_node;
         }
@@ -266,8 +291,8 @@ size_t LockFreeQueue<T>::pop_batch(std::vector<T>& out, size_t max_count) {
 
 template<typename T>
 bool LockFreeQueue<T>::empty() const {
-    Node* head = head_.load(std::memory_order_relaxed);
-    Node* next = head->next.load(std::memory_order_acquire);
+    NodeBase* head = head_.load(std::memory_order_relaxed);
+    NodeBase* next = head->next.load(std::memory_order_acquire);
     return next == nullptr;
 }
 

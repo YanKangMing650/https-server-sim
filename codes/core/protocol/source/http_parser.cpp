@@ -62,7 +62,7 @@ int HttpParser::read_line(char* out, size_t max_len, size_t* out_len) {
     }
 
     // 检查输出缓冲区大小（留出null终止符空间）
-    if (pos + 1 > max_len) {
+    if (pos >= max_len) {
         set_error(PROTOCOL_ERROR_TOO_LONG, "Line too long");
         return PROTOCOL_ERROR_TOO_LONG;
     }

@@ -31,12 +31,12 @@ public:
     // 创建连接
     // fd: socket文件描述符
     // server_port: server监听端口
-    // return: Connection指针（有效期至remove_connection调用前）
-    Connection* create_connection(int fd, uint16_t server_port);
+    // return: Connection的shared_ptr，可安全持有
+    std::shared_ptr<Connection> create_connection(int fd, uint16_t server_port);
 
     // 获取连接
-    Connection* get_connection(uint64_t conn_id);
-    const Connection* get_connection(uint64_t conn_id) const;
+    std::shared_ptr<Connection> get_connection(uint64_t conn_id);
+    std::shared_ptr<const Connection> get_connection(uint64_t conn_id) const;
 
     // 移除连接
     void remove_connection(uint64_t conn_id);
@@ -51,16 +51,20 @@ public:
     void for_each_connection(std::function<void(const Connection&)> func) const;
 
     // 检查超时（锁内收集，锁外回调）
-    // 注意：回调中不应立即销毁Connection，应先标记关闭再异步清理
-    // 指针有效期保证：回调期间Connection对象保持有效（即使调用remove_connection）
+    // 使用shared_ptr保证回调期间Connection对象安全
     void check_timeouts(uint32_t idle_timeout_ms,
                         uint32_t callback_timeout_ms,
                         std::function<void(Connection&)> on_timeout);
 
-    // 清空所有连接
+    // 检查回调超时（设计文档要求的接口）
+    // timeout_seconds: 超时时间（秒）
+    void check_callback_timeouts(uint32_t timeout_seconds);
+
+    // 清空所有连接（已弃用，建议使用close_all()）
+    // @deprecated 请使用 close_all() 代替
     void clear_all();
 
-    // 关闭所有连接（与clear_all功能相同，用于兼容设计文档）
+    // 关闭所有连接（推荐使用）
     void close_all();
 
     // 获取统计信息
@@ -68,7 +72,7 @@ public:
 
 private:
     uint64_t next_connection_id_;
-    std::unordered_map<uint64_t, std::unique_ptr<Connection>> connections_;
+    std::unordered_map<uint64_t, std::shared_ptr<Connection>> connections_;
     mutable std::mutex mutex_;
     std::unique_ptr<TimeSource> time_source_;
 };

@@ -1,219 +1,306 @@
-# 全代码检视意见报告
+# C++代码检视报告
 
-**版本**: 第1版
-**生成日期**: 2026-02-18
-**检视范围**: 所有模块 (Server, Connection, MsgCenter, Protocol, Utils, Callback, DebugChain)
-
----
-
-## 一、评分汇总
-
-| 模块 | 扣分 | 得分 |
-|------|------|------|
-| Server | 10.4 | 89.6 |
-| Connection | 10.3 | 89.7 |
-| MsgCenter | 15.3 | 84.7 |
-| Protocol | 18.6 | 81.4 |
-| Utils | 5.6 | 94.4 |
-| Callback | 2.3 | 97.7 |
-| DebugChain | 59.4 | 40.6 |
-| **总分** | **111.9** | **678.1** |
-| **平均分** | **15.99** | **84.01** |
-
-**整体评分**: 84 分 (满分 100 分)
+## 概览
+- 检视范围：Callback、Connection、DebugChain、MsgCenter、Protocol、Server、Utils模块
+- 检视时间：2026-02-19
+- 初始分数：100分
+- 问题统计：严重0个，重要3个，一般12个，建议20个
 
 ---
 
-## 二、问题汇总
+## 问题详情
 
-### 致命级别问题 (扣30分)
-无
+### 重要问题
 
----
+#### 1. [Callback模块] callback_registry_get_strategy存在线程安全隐患
+- **位置**: codes/core/callback/include/callback/callback.h:104-105
+- **问题描述**: 返回裸指针，用户在持有该指针期间如果另一个线程调用deregister_callback或destroy，会导致悬空指针访问
+- **严重程度**: 重要
+- **扣分**: 3分
+- **建议**: 该接口已标记deprecated，但仍建议在注释中明确警告返回指针的有效期限制，或完全移除该接口
 
-### 严重级别问题 (扣10分)
+#### 2. [Connection模块] get_connection返回裸指针存在线程安全风险
+- **位置**: codes/core/connection/include/connection/connection_manager.hpp:38-39
+- **问题描述**: 返回的Connection*在调用remove_connection后立即失效，如果另一个线程同时持有并使用该指针，会导致未定义行为
+- **严重程度**: 重要
+- **扣分**: 3分
+- **建议**: 考虑返回shared_ptr<Connection>，或在文档中明确指针有效期保证（仅在下次调用remove_connection前有效）
 
-#### DebugChain 模块 (扣50分)
-- [debug_config.hpp:10-54] 完全不符合详细设计文档，DebugConfig结构体定义错误，缺少enabled/delay_ms/force_disconnect/log_packet/http_status字段，多了DebugActionType/DebugPointConfig/DebugChainConfig等未设计的类型
-- [debug_context.hpp:10-46] 完全不符合详细设计文档，DebugContext结构体定义错误，缺少config/request_data/response_data/override_http_status/skip_callback/disconnect_after字段
-- [debug_handler.hpp:9-55] 完全不符合详细设计文档，DebugHandler是C++虚基类而非C风格struct，函数签名与设计完全不符
-- [debug_chain.hpp:11-52] 完全不符合详细设计文档，DebugChain类接口错误，缺少register_handler/unregister_handler/process_request/process_response/sort_handlers方法，缺少DebugHandlerRegistry C接口
-- [debug_chain.cpp:1-336] 实现完全不符合详细设计文档，未实现DelayHandler/DisconnectHandler/LogHandler/ErrorCodeHandler的创建函数，未实现debug_handler_registry_*系列C接口
-
----
-
-### 重要级别问题 (扣3分)
-
-#### Server 模块 (扣6分)
-- [server.hpp:45-52] ServerStatus结构体重复定义，设计文档明确说明该结构定义在 `codes/api/adapt/include/server_adapt.h`，当前在server.hpp中重复定义会导致类型不一致问题
-- [server.cpp:388-393] wait_pending_requests()调用的ConnectionManager接口不符合设计文档，设计文档要求调用`check_callback_timeouts(uint32_t)`，当前代码调用的是`check_timeouts`，参数签名也不匹配
-
-#### Connection 模块 (扣9分)
-- [connection.cpp:83-88] 析构函数中对fd范围进行特殊处理（不关闭0-2），这与设计文档不符。设计文档明确Connection持有fd所有权并负责关闭，不应根据fd值区别对待。
-- [connection.cpp:243-249] close()函数中同样对fd范围进行特殊处理，不关闭0-2的fd，违反设计文档中Connection负责关闭fd的职责约定。
-- [connection_manager.cpp:119-122] close_all()直接调用clear_all()，没有先调用每个Connection的close()，这不符合设计文档要求的关闭流程。
-
-#### MsgCenter 模块 (扣12分)
-- [msg_center.cpp:25] start()返回-1而非MsgCenterError::ALREADY_RUNNING，未按设计文档使用统一错误码
-- [msg_center.cpp:30] start()返回-2而非MsgCenterError::INVALID_PARAMETER，未按设计文档使用统一错误码
-- [msg_center.cpp:69] start()返回-3而非MsgCenterError::THREAD_CREATE_FAILED，未按设计文档使用统一错误码
-- [msg_center.cpp:83] start()返回-3而非MsgCenterError::THREAD_CREATE_FAILED，未按设计文档使用统一错误码
-
-#### Protocol 模块 (扣15分)
-- [protocol_types.hpp:20] PROTOCOL_ERROR_EAGAIN定义为-EAGAIN，但未包含<errno.h>，EAGAIN宏可能未定义，存在可移植性问题
-- [hpack.cpp:18-88] HPACK实现未使用nghttp2库，而是自行实现简化版本，与详细设计文档要求不符（文档要求使用nghttp2库）
-- [hpack.hpp:57-58] HpackEncoder::nghttp2_encoder_在设计文档中要求存在，但实际代码中未实现
-- [hpack.hpp:100] HpackDecoder::nghttp2_decoder_在设计文档中要求存在，但实际代码中未实现
-- [protocol_handler.hpp:34] ProtocolFactory::create_handler接口与设计文档不符，设计文档要求传递conn参数，但实现中没有
+#### 3. [Protocol模块] TlsHandler缺少初始化状态检查
+- **位置**: codes/core/protocol/source/tls_handler.cpp（推测）
+- **问题描述**: 从代码片段看，TlsHandler成员变量初始化为nullptr，但未看到在public方法中检查是否已正确初始化
+- **严重程度**: 重要
+- **扣分**: 3分
+- **建议**: 在所有public方法开头添加初始化状态检查，避免未初始化调用
 
 ---
 
-### 一般级别问题 (扣1分)
+### 一般问题
 
-#### Server 模块 (扣4分)
-- [server.hpp:167] 新增的`cleaned_up_`原子变量未在设计文档中出现，属于设计外新增
-- [server.cpp:46-47] `cleaned_up_`标志的重置操作在状态设置之后，逻辑顺序不合理
-- [server.cpp:171-173] cleanup()使用`cleaned_up_.exchange(true)`防止重复执行，但init()中只重置了标志而未重置资源，可能导致后续init()无法正常初始化
-- [server.cpp:125] start()调用`add_listen_fd(fd)`缺少port参数，设计文档约定接口为`add_listen_fd(int fd, uint16_t port)`
-- [server.cpp:240] 使用`snprintf`格式化字符串时格式字符串为`%s`但传入`std::string::c_str()`，虽然可行但存在不必要的开销
-- [test_server.cpp:442-443] stop_thread的lambda表达式中捕获变量`ret`并赋值，但该变量是主线程栈上的局部变量，存在数据竞争
+#### 4. [Callback模块] 缺少deregister_strategy的C接口
+- **位置**: codes/core/callback/include/callback/callback.h
+- **问题描述**: C++类有deregister_callback方法，但C接口只有register_strategy，没有对应的deregister_strategy接口
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 补充C接口：int callback_registry_deregister_strategy(CallbackRegistry* registry, uint16_t port)
 
-#### Connection 模块 (扣3分)
-- [connection.hpp:182-184] 在生产代码头文件中为单元测试添加友元声明，污染了生产代码接口。
-- [connection_manager.hpp:16] 引入了不必要的statistics.hpp依赖，设计文档未提及ConnectionManager需要统计功能。
-- [connection_manager.cpp:124-130] get_statistics()使用了StatisticsManager单例，与设计文档不符，设计文档未要求此功能。
+#### 5. [DebugChain模块] process_request/process_response在config->enabled=false时返回值语义不清
+- **位置**: codes/core/debug_chain/source/debug_chain.cpp:125-127, 160-162
+- **问题描述**: config->enabled=false时返回kRetContinueChain(0)，但此时并未执行任何handler。建议使用专用返回码表示"未执行"
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 定义专门的返回码kRetNotExecuted表示配置未启用，或明确文档说明返回值语义
 
-#### MsgCenter 模块 (扣3分)
-- [worker_pool.hpp:82] 成员变量命名为mutex_，与头文件注释中的task_queue_mutex_不一致，不符合设计文档
-- [io_thread.cpp:111-116] io_thread_func()仅为sleep轮询桩代码，未按设计文档调用平台特定事件循环
-- [msg_center.hpp:14] 额外依赖utils/statistics.hpp，设计文档未提及该依赖
-- [msg_center.cpp:155-161] get_statistics()引用未明确包含的StatisticsManager，依赖不完整
-- [msg_center.cpp:138-143] add_listen_fd()仅维护listen_fds_列表，未将fd添加到IoThread
-- [msg_center.cpp:146-153] remove_listen_fd()仅从listen_fds_列表移除，未从IoThread移除fd
+#### 6. [DebugChain模块] unregister_handler与析构函数都调用destroy，存在双重释放风险
+- **位置**: codes/core/debug_chain/source/debug_chain.cpp:103-106, 47-51
+- **问题描述**: unregister_handler会调用handler->destroy()，而DebugChain析构函数也会调用destroy()。如果用户unregister后不手动置空，析构时会重复调用destroy
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: unregister_handler成功后将该handler从handlers_移除后，不要再在析构中重复处理；或在destroy实现中增加防重复调用保护
 
-#### Protocol 模块 (扣3分)
-- [http_parser.cpp:48] 使用buffer_->read_ptr()，设计文档伪代码使用buffer_->peek()，接口命名不一致
-- [http_parser.cpp:157] 使用buffer_->read_ptr()，设计文档伪代码使用buffer_->peek()，接口命名不一致
-- [protocol_handler.cpp:429] 使用buffer_->read_ptr()，设计文档伪代码使用buffer_->peek()，接口命名不一致
-- [protocol_handler.cpp:448] 使用buffer_->read_ptr()，设计文档伪代码使用buffer_->peek()，接口命名不一致
-- [tls_handler.cpp:470-504] load_certificates()函数中重新设置cert_path_、key_path_、ca_path_，这些值在init()中已设置，存在重复代码
-- [tls_handler.cpp:600-610] configure_alpn()未按设计文档要求设置ALPN协议列表"h2,http/1.1"，仅设置了回调
-- [hpack.cpp:354-353] HpackTest.EncodeDecode测试没有实际验证解码结果与原headers的一致性，测试不完整
+#### 7. [MsgCenter模块] stop()中清理顺序可能导致事件丢失
+- **位置**: codes/core/msg_center/source/msg_center.cpp:94-120
+- **问题描述**: 先停止EventLoop，再停止WorkerPool。如果WorkerPool在停止前仍有CALLBACK_DONE事件要投递，而EventLoop已停止，这些事件会丢失
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 先停止WorkerPool，再停止EventLoop，确保WorkerPool的回调完成事件能被处理
 
-#### Utils 模块 (扣5分)
-- [error.hpp:137-140] Result::error_message() 返回局部静态变量desc存在线程安全问题，多线程环境下可能导致数据竞争
-- [statistics.cpp:147-149] 百分位数计算使用n * p / 100，当n为0时会访问sorted[0]，但代码已做空检查，这里是安全的，但建议使用更鲁棒的索引计算方式
-- [buffer.cpp:173-176] peek_uint8() 在数据不足时返回0，无任何错误提示，可能掩盖问题难以定位
-- [lockfree_queue.hpp:269-271] empty()方法从消费者视角调用，但注释说明仅消费者线程调用，缺少参数校验
-- [logger.cpp:161-162] logv()使用固定大小4096字节缓冲区，vsnprintf可能截断日志消息，未检查返回值
+#### 8. [MsgCenter模块] post_event在event_loop_为nullptr时直接投递event_queue_，但此时EventLoop可能未运行
+- **位置**: codes/core/msg_center/source/msg_center.cpp:123-130
+- **问题描述**: 如果MsgCenter未start()，投递的事件会堆积在队列中永远不会被处理
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 在post_event中检查running_状态，非运行状态下返回错误码或记录警告日志
 
-#### Callback 模块 (扣2分)
-- [callback.hpp:126-129] 详细设计文档中未定义 validate_parse_invoke_params 私有方法，实际代码中有该方法，实现与设计文档不一致
-- [callback.hpp:139-142] 详细设计文档中未定义 validate_reply_invoke_params 私有方法，实际代码中有该方法，实现与设计文档不一致
-- [test_callback.cpp:19] 单元测试使用全局变量 g_test_manager 传递测试状态，存在测试用例间相互干扰风险
+#### 9. [Server模块] init_listen_sockets中backlog硬编码默认值
+- **位置**: codes/core/server/source/server.cpp:306
+- **问题描述**: 使用DEFAULT_BACKLOG常量，但未看到该常量的定义位置；建议从配置读取或明确定义
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 在头文件中明确定义DEFAULT_BACKLOG常量，或从ServerConfig中获取
 
-#### DebugChain 模块 (扣3分)
-- [debug_chain.cpp:196-201] ErrorCodeHandler::handle函数为空实现，未设置error_code功能
-- [debug_chain.cpp:299-311] should_trigger函数使用static随机数生成器，存在线程安全问题
-- [test_debugchain.cpp:1-12] 单元测试几乎为空，只有一个DummyTest，未覆盖任何设计要求的测试用例
-- [debug_chain.hpp:34-49] DebugChainManager单例模式不符合设计文档（设计中无此要求）
+#### 10. [Server模块] cleanup()与cleanup_resources()存在功能重叠
+- **位置**: codes/core/server/source/server.cpp:166-194, 433-447
+- **问题描述**: 两个函数都清理listen_fds_等资源，容易造成混淆和重复清理
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 明确两个函数的职责边界，或合并为一个函数
 
----
+#### 11. [Utils模块] Result<T>拷贝构造函数可能造成不必要的拷贝
+- **位置**: codes/core/utils/include/utils/error.hpp:92-96
+- **问题描述**: Result(const T& value)使用拷贝构造，对于大型对象可能影响性能
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 考虑添加emplace-style构造函数或使用std::enable_if优化
 
-### 建议级别问题 (扣0.1分)
+#### 12. [Utils模块] 缺少error_code_to_string和error_code_to_description的实现
+- **位置**: codes/core/utils/include/utils/error.hpp:71-75
+- **问题描述**: 声明了这两个函数，但未看到.cpp中的实现
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 补充实现，确保链接成功
 
-#### Server 模块 (扣0.4分)
-- [server.cpp:14] 包含了`<cstdio>`但仅使用了`snprintf`一个函数，依赖较少
-- [server.cpp:238-241] get_status()中先`memset`再`snprintf`写同一缓冲区，`memset`是冗余操作
-- [test_server.cpp:402-424] UseCase015测试未实际测试"端口被占用"场景，与测试用例设计目标不符
-- [test_server.cpp:477-506] UseCase017测试未验证"多端口初始化失败时资源回滚"，仅验证了正常启动停止流程
+#### 13. [Connection模块] check_timeouts回调期间Connection指针有效性保证依赖调用者行为
+- **位置**: codes/core/connection/source/connection_manager.cpp:107-111
+- **问题描述**: 注释中说明"回调中不应立即销毁Connection"，但代码无法强制这一点
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 考虑在check_timeouts期间使用shared_ptr延长生命周期，或使用更安全的设计
 
-#### Connection 模块 (扣0.4分)
-- [connection.cpp:69] 构造函数初始化列表中先使用time_source获取时间（第69行），然后才设置time_source_成员（第72行），逻辑顺序不够清晰易读。
-- [connection.hpp:115] is_fd_valid()是设计文档中未定义的额外接口，属于过度设计。
-- [connection.hpp:36-37] connection_state_to_string()函数是设计文档未要求的额外功能。
-- [connection_manager.hpp:63-64] close_all()是为"兼容设计文档"而添加，设计文档明确要求的是clear_all()，存在命名混淆。
+#### 14. [Protocol模块] ALPN选择回调中字符串解析逻辑复杂且无错误处理
+- **位置**: codes/core/protocol/source/tls_handler.cpp:76-96
+- **问题描述**: 解析alpn_protocols_时，如果格式错误（如多个连续逗号、首尾逗号），会产生空字符串协议名
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 添加空字符串检查，跳过无效的协议名
 
-#### MsgCenter 模块 (扣0.3分)
-- [io_thread.cpp:22-28] 大量(void)标记未使用变量，桩代码实现方式不够优雅
-- [io_thread.cpp:119-146] event_loop_linux/mac/windows()和wake_up()均为未实现的空函数
-
-#### Protocol 模块 (扣0.6分)
-- [protocol_types.hpp:53] ProtocolType::UNKNOWN值为2，与HTTP_1_1(0)、HTTP_2(1)不连续，建议调整为连续枚举
-- [http_parser.cpp:65] read_line()中检查pos + 1 > max_len，注释说是留出null终止符空间，但实际只写了out[pos] = '\0'，可以用pos >= max_len更清晰
-- [protocol_handler.cpp:639] handle_rst_stream_frame()中error_code参数未使用，建议添加[[maybe_unused]]属性或使用该参数
-- [protocol_handler.cpp:656] handle_goaway_frame()中payload和len参数未使用，建议添加[[maybe_unused]]属性
-- [tls_handler.cpp:449] init_ssl_context()中config参数未使用，建议添加[[maybe_unused]]属性
-- [tls_handler.cpp:527] configure_certificates()中config参数未使用，建议添加[[maybe_unused]]属性
-- [test_protocol.cpp:362] HpackTest.EncodeDecode测试未验证解码结果，建议增加验证逻辑
-
-#### Utils 模块 (扣1.6分)
-- [logger.hpp:1-3] 缺少文件头注释说明
-- [time.hpp:1-3] 缺少文件头注释说明
-- [config.hpp:1-3] 缺少文件头注释说明
-- [error.hpp:1-3] 缺少文件头注释说明
-- [statistics.hpp:1-3] 缺少文件头注释说明
-- [buffer.hpp:1-3] 缺少文件头注释说明
-- [lockfree_queue.hpp:1-3] 缺少文件头注释说明
-- [logger.cpp:1-3] 缺少文件头注释说明
-- [time.cpp:1-3] 缺少文件头注释说明
-- [config.cpp:1-3] 缺少文件头注释说明
-- [error.cpp:1-3] 缺少文件头注释说明
-- [statistics.cpp:1-3] 缺少文件头注释说明
-- [buffer.cpp:1-3] 缺少文件头注释说明
-- [logger.cpp:64] init()返回-1表示失败，未使用统一的ErrorCode枚举
-- [logger.cpp:92] set_file()返回-1表示失败，未使用统一的ErrorCode枚举
-- [config.hpp:14-19] ServerConfig默认值硬编码（8443、5、30等），建议定义为命名常量
-- [statistics.hpp:95] MAX_LATENCIES硬编码为100000，建议可配置
-
-#### Callback 模块 (扣0.6分)
-- [callback.cpp:127] validate_strategy 函数访问 strategy->name[0] 时，假设 name 是以'\0'结尾的有效C字符串，若传入无效指针存在未定义行为风险
-- [client_context.h:28] 文件末尾存在冗余注释"// 文件结束"
-- [callback.h:94] 文件末尾存在冗余注释"// 文件结束"
-- [callback.hpp:150] 文件末尾存在冗余注释"// 文件结束"
-- [callback.cpp:210] 文件末尾存在冗余注释"// 文件结束"
-- [test_callback.cpp:720] 文件末尾存在冗余注释"// 文件结束"
-
-#### DebugChain 模块 (扣0.5分)
-- [debug_chain.cpp:155-156] DelayHandler构造/析构函数为空，可使用=default简化
-- [debug_chain.cpp:174-175] DisconnectHandler构造/析构函数为空，可使用=default简化
-- [debug_chain.cpp:188-189] ErrorCodeHandler构造/析构函数为空，可使用=default简化
-- [debug_chain.cpp:204-205] LogHandler构造/析构函数为空，可使用=default简化
-- [debug_chain.cpp:309] uniform_int_distribution使用int，应使用与probability一致的uint32_t
+#### 15. [Server模块] graceful_shutdown_标志设置后没有快速失败机制
+- **位置**: codes/core/server/source/server.cpp:329
+- **问题描述**: 设置graceful_shutdown_=true后，代码中没有看到其他地方检查该标志来快速失败新请求
+- **严重程度**: 一般
+- **扣分**: 1分
+- **建议**: 在接受新连接或处理新请求的路径上检查graceful_shutdown_标志
 
 ---
 
-## 三、修改优先级建议
+### 建议级别问题
 
-### 第一优先级（严重级别）
-1. **DebugChain 模块完全重构** - 该模块完全不符合设计文档，需要按照 lld-详细设计文档-DebugChain.md 完全重写
+#### 16. [Callback模块] get_callback返回shared_ptr<const CallbackStrategy>，但策略内容可能包含可变指针
+- **位置**: codes/core/callback/include/callback/callback.h:151
+- **问题描述**: const修饰的是CallbackStrategy结构体，但函数指针本身指向的内容可能是可变的
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 文档说明回调函数应保证线程安全
 
-### 第二优先级（重要级别）
-1. Server 模块：修复 ServerStatus 重复定义问题、修复 ConnectionManager 接口调用
-2. Connection 模块：移除 fd 0-2 特殊处理、修复 close_all() 流程
-3. MsgCenter 模块：统一使用错误码枚举
-4. Protocol 模块：修复 HPACK 实现以使用 nghttp2 库、修复接口签名
+#### 17. [Callback模块] validate_strategy中port==0被视为无效，但端口0在某些场景下是合法的
+- **位置**: codes/core/callback/source/callback.cpp:141
+- **问题描述**: 端口0通常表示"让系统分配端口"，但此处直接拒绝
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 考虑是否需要支持端口0，或在文档中明确说明不支持
 
-### 第三优先级（一般级别）
-1. 各模块的线程安全问题
-2. 各模块的设计文档一致性问题
-3. 单元测试完整性问题
+#### 18. [Callback模块] invoke_parse_callback/invoke_reply_callback中锁粒度过细
+- **位置**: codes/core/callback/source/callback.cpp:77-86, 111-119
+- **问题描述**: 先在锁内获取函数指针，再在锁外调用。虽然线程安全，但可以考虑直接拷贝shared_ptr后全程无锁
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 可以用shared_ptr拷贝来减少锁持有时间
 
-### 第四优先级（建议级别）
-1. 代码风格优化
-2. 注释完善
-3. 硬编码值提取为常量
+#### 19. [Connection模块] create_connection返回的指针有效期不明确
+- **位置**: codes/core/connection/include/connection/connection_manager.hpp:35
+- **问题描述**: 注释说"有效期至remove_connection调用前"，但在多线程场景下难以保证
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 考虑返回shared_ptr或明确使用模式
+
+#### 20. [Connection模块] close_all()转移unique_ptr到临时vector的设计很好，但可以更简洁
+- **位置**: codes/core/connection/source/connection_manager.cpp:142-159
+- **问题描述**: 代码逻辑正确，但可以用更简洁的方式实现
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 保持现状即可，当前实现已经很清晰
+
+#### 21. [DebugChain模块] sort_handlers比较函数过于复杂
+- **位置**: codes/core/debug_chain/source/debug_chain.cpp:185-212
+- **问题描述**: 分4个阶段排序，实际上register_handler已做nullptr检查，可以简化
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 简化比较函数，因为register_handler已保证handler非空
+
+#### 22. [DebugChain模块] process_request/process_response有重复代码
+- **位置**: codes/core/debug_chain/source/debug_chain.cpp:112-180
+- **问题描述**: 两个函数逻辑几乎相同，仅调用handle_request或handle_response不同
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 抽取私有模板方法，传入成员函数指针减少重复
+
+#### 23. [DebugChain模块] has_handler方法可以优化
+- **位置**: codes/core/debug_chain/source/debug_chain.cpp:71-84
+- **问题描述**: 每次都用std::find_if线性搜索，handler数量通常较少影响不大
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 保持现状，handler数量不多时线性搜索足够
+
+#### 24. [MsgCenter模块] WorkerPool中post_callback_done_和queue_closed_都是atomic<bool>，功能有重叠
+- **位置**: codes/core/msg_center/include/msg_center/worker_pool.hpp（推测）
+- **问题描述**: 两个标志位都可以表示停止状态，容易混淆
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 明确两个标志的职责区别，或考虑合并
+
+#### 25. [MsgCenter模块] EventQueue::get_highest_priority_queue线性扫描可以优化
+- **位置**: codes/core/msg_center/source/event_queue.cpp（推测）
+- **问题描述**: 每次从0开始扫描，优先级数量少（8个）影响不大
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 保持现状
+
+#### 26. [MsgCenter模块] 缺少MsgCenterError枚举到字符串的转换函数
+- **位置**: codes/core/msg_center/include/msg_center/msg_center.hpp
+- **问题描述**: 定义了MsgCenterError枚举，但没有转换函数便于日志打印
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 补充msg_center_error_to_string()函数
+
+#### 27. [Protocol模块] AlpnSelectCallback中handler->get_alpn_protocols()返回拷贝可能影响性能
+- **位置**: codes/core/protocol/source/tls_handler.cpp:77
+- **问题描述**: 每次握手都拷贝字符串，建议返回const引用
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 考虑改为返回const std::string&
+
+#### 28. [Protocol模块] 细节包装器放在details命名空间很好，但可以考虑使用unique_ptr的别名模板
+- **位置**: codes/core/protocol/source/tls_handler.cpp:22-62
+- **问题描述**: UniqueFilePtr等定义清晰，但可以更通用
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 保持现状即可
+
+#### 29. [Server模块] wait_pending_requests中每100ms检查一次，间隔可以配置化
+- **位置**: codes/core/server/source/server.cpp:403
+- **问题描述**: 100ms硬编码，可以改为可配置参数
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 考虑添加配置项或定义具名常量
+
+#### 30. [Server模块] 多个地方使用MAX_CALLBACK_TIMEOUT_SECONDS和MAX_CONN_CLOSE_WAIT_SECONDS，但定义位置不明确
+- **位置**: codes/core/server/source/server.cpp:387, 397, 423
+- **问题描述**: 未看到这两个常量的定义位置
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 在头文件中明确定义这两个常量
+
+#### 31. [Server模块] init_listen_sockets只支持IPv4，缺少IPv6支持
+- **位置**: codes/core/server/source/server.cpp:258
+- **问题描述**: 硬编码AF_INET，设计文档中也说明仅支持IPv4
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 与设计文档一致，可作为后续扩展项
+
+#### 32. [Utils模块] ErrorCode枚举范围划分清晰，但未使用该枚举的模块仍在使用自定义错误码
+- **位置**: codes/core/utils/include/utils/error.hpp
+- **问题描述**: Server等模块仍在使用自己的ERR_*常量，未统一使用ErrorCode
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 逐步统一错误码体系
+
+#### 33. [Utils模块] Result<T>的is_ok()/is_err()命名与is_success()/is_error()不一致
+- **位置**: codes/core/utils/include/utils/error.hpp:78-85, 127-128
+- **问题描述**: 自由函数用is_success/is_error，Result成员用is_ok/is_err
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 统一命名风格
+
+#### 34. [Utils模块] Buffer相关代码新增，但未看到完整实现
+- **位置**: codes/core/utils/include/utils/buffer.hpp
+- **问题描述**: 从git stat看到有新增，但未检视完整实现
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 补充检视Buffer模块的完整实现
+
+#### 35. [整体] 缺少模块间接口版本兼容性设计
+- **位置**: 所有模块
+- **问题描述**: C接口没有版本字段，未来接口变更可能导致兼容性问题
+- **严重程度**: 建议
+- **扣分**: 0.1分
+- **建议**: 考虑在C接口结构体中添加version字段预留
 
 ---
 
-## 四、总结
+## 总体评价
 
-本次全代码检视共发现 **69 个问题**，其中：
-- 严重级别：5 个
-- 重要级别：15 个
-- 一般级别：25 个
-- 建议级别：24 个
+### 代码质量评价
+本次检视的7个模块整体代码质量较高，主要优点包括：
+1. **设计文档完整**: 各模块都有详细的LLD文档，设计思路清晰
+2. **线程安全考虑周到**: 大部分共享数据都有适当的锁保护
+3. **RAII原则遵循较好**: 使用智能指针管理资源
+4. **错误处理较为完善**: 大部分函数都有参数检查和错误码返回
+5. **C接口封装规范**: Callback和DebugChain模块提供了完整的C接口
 
-**整体评分 84 分**，未达到 99 分要求，需要进行修改。
+### 主要改进方向
+1. **线程安全**: 返回裸指针的API需要更明确的生命周期保证
+2. **错误码统一**: 建议统一使用Utils模块的ErrorCode枚举
+3. **配置化**: 部分硬编码常量可以考虑配置化
+4. **代码复用**: 部分重复逻辑可以抽取公共函数
 
-**最关键问题**：DebugChain 模块完全不符合设计文档，需要完全重写。
+---
+
+## 扣分汇总
+
+| 严重程度 | 数量 | 单题扣分 | 小计 |
+|---------|------|---------|------|
+| 严重 | 0 | 10 | 0 |
+| 重要 | 3 | 3 | 9 |
+| 一般 | 12 | 1 | 12 |
+| 建议 | 20 | 0.1 | 2 |
+| **合计** | **35** | - | **23** |
+
+---
+
+## 最终得分
+
+**100 - 23 = 77分**
+
+---
+
+**报告结束**

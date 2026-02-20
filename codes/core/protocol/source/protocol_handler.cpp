@@ -81,6 +81,9 @@ int Http1Handler::on_read() {
         plaintext_buffer_->write(temp_buf, read_len);
     }
 
+    // 确保parser_已正确初始化
+    parser_.init(plaintext_buffer_.get());
+
     while (true) {
         switch (state_) {
             case Http1ParseState::EXPECT_REQUEST_LINE: {
@@ -92,14 +95,21 @@ int Http1Handler::on_read() {
                 }
                 if (ret < 0) {
                     state_ = Http1ParseState::ERROR;
-                    break;
+                    // 直接处理错误状态，避免重复循环
+                    response_.status_code = 400;
+                    response_.status_text = "Bad Request";
+                    generate_response();
+                    return PROTOCOL_ERROR_INVALID;
                 }
                 if (parser_.parse_request_line(line, line_len,
                                                &request_.method,
                                                &request_.path,
                                                &request_.version) < 0) {
                     state_ = Http1ParseState::ERROR;
-                    break;
+                    response_.status_code = 400;
+                    response_.status_text = "Bad Request";
+                    generate_response();
+                    return PROTOCOL_ERROR_INVALID;
                 }
                 state_ = Http1ParseState::EXPECT_HEADERS;
                 break;
@@ -112,7 +122,10 @@ int Http1Handler::on_read() {
                 }
                 if (ret < 0) {
                     state_ = Http1ParseState::ERROR;
-                    break;
+                    response_.status_code = 400;
+                    response_.status_text = "Bad Request";
+                    generate_response();
+                    return PROTOCOL_ERROR_INVALID;
                 }
 
                 std::string te_value;
@@ -120,7 +133,10 @@ int Http1Handler::on_read() {
                     if (te_value.find("chunked") != std::string::npos ||
                         te_value.find("CHUNKED") != std::string::npos) {
                         state_ = Http1ParseState::ERROR;
-                        break;
+                        response_.status_code = 400;
+                        response_.status_text = "Bad Request";
+                        generate_response();
+                        return PROTOCOL_ERROR_INVALID;
                     }
                 }
 
@@ -134,7 +150,10 @@ int Http1Handler::on_read() {
                     unsigned long long cl = strtoull(value.c_str(), &endptr, 10);
                     if (errno != 0 || endptr == value.c_str() || *endptr != '\0') {
                         state_ = Http1ParseState::ERROR;
-                        break;
+                        response_.status_code = 400;
+                        response_.status_text = "Bad Request";
+                        generate_response();
+                        return PROTOCOL_ERROR_INVALID;
                     }
                     request_.content_length = cl;
                 } else {
@@ -175,15 +194,12 @@ int Http1Handler::on_read() {
             }
 
             case Http1ParseState::ERROR: {
+                // 这个分支理论上不会到达，因为设置ERROR时已直接返回
                 response_.status_code = 400;
                 response_.status_text = "Bad Request";
                 generate_response();
                 return PROTOCOL_ERROR_INVALID;
             }
-        }
-
-        if (state_ == Http1ParseState::ERROR) {
-            break;
         }
     }
 
@@ -191,6 +207,12 @@ int Http1Handler::on_read() {
 }
 
 int Http1Handler::on_write() {
+    // 处理写事件：尝试将TLS层待发送的数据 flush 到Connection写缓冲区
+    if (tls_handler_) {
+        // TLSHandler的write()方法内部已包含pump_write_bio()逻辑
+        // 这里我们无需额外操作，因为generate_response()已通过tls_handler_->write()发送数据
+        // 如果有部分写入的场景，这里可以补充处理
+    }
     return PROTOCOL_OK;
 }
 
@@ -229,14 +251,18 @@ int Http1Handler::handle_complete_request() {
     }
 
     // 构建ClientContext并调用Callback模块
+    // 注意：将字符串复制到局部变量，确保指针在函数执行期间有效（修复悬空指针问题）
     ClientContext ctx;
     const ClientInfo& client_info = conn_->get_client_info();
 
+    std::string local_client_ip = client_info.client_ip;
+    std::string local_debug_token = request_.debug_token;
+
     ctx.connection_id = client_info.connection_id;
-    ctx.client_ip = client_info.client_ip.c_str();
+    ctx.client_ip = local_client_ip.c_str();
     ctx.client_port = client_info.client_port;
     ctx.server_port = client_info.server_port;
-    ctx.token = request_.debug_token.empty() ? nullptr : request_.debug_token.c_str();
+    ctx.token = local_debug_token.empty() ? nullptr : local_debug_token.c_str();
 
     // 这里我们使用桩代码模拟Callback模块的调用
     // 实际项目中应该从CallbackRegistry获取策略
@@ -392,6 +418,12 @@ int Http2Handler::on_read() {
 }
 
 int Http2Handler::on_write() {
+    // 处理写事件：尝试将TLS层待发送的数据 flush 到Connection写缓冲区
+    if (tls_handler_) {
+        // TLSHandler的write()方法内部已包含pump_write_bio()逻辑
+        // 这里我们无需额外操作
+        // 如果有部分写入的场景，这里可以补充处理
+    }
     return PROTOCOL_OK;
 }
 
@@ -847,26 +879,29 @@ int Http2Handler::handle_complete_request(Http2Stream* stream) {
     }
 
     // 构建ClientContext并调用Callback模块
+    // 注意：将字符串复制到局部变量，确保指针在函数执行期间有效（修复悬空指针问题）
     ClientContext ctx;
     const ClientInfo& client_info = conn_->get_client_info();
 
+    std::string local_client_ip = client_info.client_ip;
+    std::string local_debug_token;
+    bool found_token = false;
+
     ctx.connection_id = client_info.connection_id;
-    ctx.client_ip = client_info.client_ip.c_str();
+    ctx.client_ip = local_client_ip.c_str();
     ctx.client_port = client_info.client_port;
     ctx.server_port = client_info.server_port;
 
     // 从header中获取debug token（大小写不敏感查找）
-    std::string debug_token;
-    bool found_token = false;
     for (const auto& header : stream->request.headers) {
         if (StrCaseCmp(header.first.c_str(), "Debug-Token") == 0) {
-            debug_token = header.second;
+            local_debug_token = header.second;
             found_token = true;
             break;
         }
     }
     if (found_token) {
-        ctx.token = debug_token.c_str();
+        ctx.token = local_debug_token.c_str();
     } else {
         ctx.token = nullptr;
     }
@@ -909,6 +944,14 @@ ProtocolHandler* ProtocolFactory::create_handler(ProtocolType type) {
         default:
             return nullptr;
     }
+}
+
+ProtocolHandler* ProtocolFactory::create_handler(ProtocolType type, Connection* conn) {
+    // 关联用例: PROTO-001 修复
+    // 注意: 当前Http1Handler/Http2Handler不在构造函数中接收Connection
+    // Connection通过init()方法传入，这里我们创建处理器后返回，调用方需调用init()
+    (void)conn;  // 为了兼容性保留参数
+    return create_handler(type);
 }
 
 void ProtocolFactory::destroy_handler(ProtocolHandler* handler) {

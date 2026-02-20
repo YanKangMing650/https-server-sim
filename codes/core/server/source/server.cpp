@@ -23,7 +23,7 @@ Server::Server()
     : status_(SERVER_STATUS_STOPPED)
     , running_(false)
     , graceful_shutdown_(false)
-    , cleaned_up_(false)
+    , resources_cleaned_(false)
 {
 }
 
@@ -43,35 +43,26 @@ int Server::init(const std::string& config_file)
         status_ = SERVER_STATUS_INITIALIZING;
     }
 
-    // 重置cleanup标志，允许再次初始化
-    cleaned_up_ = false;
-
     try {
         // 步骤2: 创建并加载配置（不加锁）
         config_ = std::make_unique<config::Config>();
         int ret = config_->load_from_file(config_file);
         if (ret != ERR_SUCCESS) {
-            cleanup();
-            std::lock_guard<std::mutex> lock(mutex_);
-            status_ = SERVER_STATUS_ERROR;
+            handle_init_error();
             return ERR_CONFIG_LOAD;
         }
 
         // 步骤3: 校验配置（不加锁）
         ret = config_->validate();
         if (ret != ERR_SUCCESS) {
-            cleanup();
-            std::lock_guard<std::mutex> lock(mutex_);
-            status_ = SERVER_STATUS_ERROR;
+            handle_init_error();
             return ERR_CONFIG_VALIDATE;
         }
 
         // 步骤4: 初始化监听socket（不加锁）
         int socket_ret = init_listen_sockets();
         if (socket_ret != ERR_SUCCESS) {
-            cleanup();
-            std::lock_guard<std::mutex> lock(mutex_);
-            status_ = SERVER_STATUS_ERROR;
+            handle_init_error();
             return socket_ret;
         }
 
@@ -80,15 +71,10 @@ int Server::init(const std::string& config_file)
         msg_center_ = std::make_unique<MsgCenter>();
 
         // 步骤6: 设置状态（仅在修改status_时加锁）
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            status_ = SERVER_STATUS_STOPPED;
-        }
+        set_status(SERVER_STATUS_STOPPED);
         return ERR_SUCCESS;
     } catch (...) {
-        cleanup();
-        std::lock_guard<std::mutex> lock(mutex_);
-        status_ = SERVER_STATUS_ERROR;
+        handle_init_error();
         return ERR_INTERNAL;
     }
 }
@@ -121,21 +107,29 @@ int Server::start()
 
     // 步骤3: 注册监听socket到MsgCenter
     std::vector<int> registered_fds;
-    for (int fd : listen_fds_) {
-        ret = msg_center_->add_listen_fd(fd);
+    for (size_t i = 0; i < listen_fds_.size(); ++i) {
+        int fd = listen_fds_[i];
+        uint16_t port = listen_ports_[i];
+        ret = msg_center_->add_listen_fd(fd, port);
         if (ret != ERR_SUCCESS) {
             // 注册失败，回滚已注册的fd
             for (int reg_fd : registered_fds) {
                 msg_center_->remove_listen_fd(reg_fd);
             }
-            // 先停止MsgCenter，再调用cleanup()
+            // 先停止MsgCenter
             msg_center_->stop();
+            // 手动清理除listen_fds_外的资源，避免重复关闭
+            cleanup_resources();
+            msg_center_.reset();
+            conn_manager_.reset();
+            config_.reset();
+            // 设置状态为STOPPED（单一状态，避免状态翻转）
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                status_ = SERVER_STATUS_ERROR;
+                status_ = SERVER_STATUS_STOPPED;
                 running_ = false;
             }
-            cleanup();
+            resources_cleaned_ = false;
             return ERR_INTERNAL;
         }
         registered_fds.push_back(fd);
@@ -167,11 +161,6 @@ int Server::stop()
 
 void Server::cleanup()
 {
-    // 检查是否已经清理过，避免重复执行
-    if (cleaned_up_.exchange(true)) {
-        return;
-    }
-
     // 步骤1: 清理监听socket（不加锁，避免耗时操作阻塞其他线程）
     for (int fd : listen_fds_) {
         if (fd >= 0) {
@@ -182,22 +171,24 @@ void Server::cleanup()
     listen_ports_.clear();
     listen_ips_.clear();
 
-    // 步骤2: 销毁子模块（不加锁）
+    // 步骤2: 清理资源（包含MsgCenter停止等）
+    cleanup_resources();
+
+    // 步骤3: 销毁子模块（不加锁）
     msg_center_.reset();
     conn_manager_.reset();
 
-    // 步骤3: 清理配置（不加锁）
+    // 步骤4: 清理配置（不加锁）
     config_.reset();
-
-    // 步骤4: 重置标志（不加锁，原子变量）
-    running_ = false;
-    graceful_shutdown_ = false;
 
     // 步骤5: 恢复状态为STOPPED（仅在修改status_时加锁）
     {
         std::lock_guard<std::mutex> lock(mutex_);
         status_ = SERVER_STATUS_STOPPED;
     }
+
+    // 步骤6: 重置resources_cleaned_标志，允许再次init
+    resources_cleaned_ = false;
 }
 
 void Server::get_status(ServerStatus* status) const
@@ -247,14 +238,13 @@ void Server::get_statistics(utils::Statistics* stats) const
         return;
     }
 
-    // 注意：当前实现中，ConnectionManager和MsgCenter都使用StatisticsManager，
-    // 所以直接获取StatisticsManager的统计信息即可
+    // 直接从 StatisticsManager 获取完整统计信息
+    // StatisticsManager 是全局唯一的统计信息管理者，包含所有模块的统计数据
     utils::StatisticsManager::instance().get_statistics(stats);
 }
 
 int Server::init_listen_sockets()
 {
-    int ret;
     const auto& listens = config_->get_listens();
 
     for (const auto& listen_cfg : listens) {
@@ -272,13 +262,24 @@ int Server::init_listen_sockets()
 
         // 设置SO_REUSEADDR选项
         int opt = 1;
-        ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        int ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
         if (ret < 0) {
             LOG_ERROR("Server", "Failed to set SO_REUSEADDR");
             ::close(fd);
             rollback_listen_sockets();
             return ERR_INTERNAL;
         }
+
+        // 设置SO_REUSEPORT选项（平台兼容性处理）
+#ifdef SO_REUSEPORT
+        opt = 1;
+        ret = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+        if (ret < 0) {
+            // SO_REUSEPORT设置失败不影响功能（某些平台可能不支持）
+            // 注意：缺少SO_REUSEPORT可能导致多进程场景下端口绑定失败
+            LOG_WARN("Server", "Failed to set SO_REUSEPORT (ignored, may affect multi-process binding)");
+        }
+#endif
 
         // 填充sockaddr_in结构
         struct sockaddr_in addr;
@@ -331,6 +332,22 @@ int Server::init_listen_sockets()
     return ERR_SUCCESS;
 }
 
+void Server::handle_init_error()
+{
+    // 先设置ERROR状态，再cleanup，避免状态竞态
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        status_ = SERVER_STATUS_ERROR;
+    }
+    cleanup();
+}
+
+void Server::set_status(ServerStatusEnum new_status)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    status_ = new_status;
+}
+
 void Server::graceful_shutdown()
 {
     // 步骤1: 设置标志（无锁，原子变量）和状态（加锁保护）
@@ -341,6 +358,8 @@ void Server::graceful_shutdown()
     }
 
     // 步骤2: 停止接受新连接（不加锁）
+    // 注意：先关闭listen_fd再等待连接，若等待期间有新连接到达会被拒绝
+    // 这是设计上可接受的行为，因为我们正在关闭服务
     stop_accepting();
 
     // 步骤3: 等待现有请求（最多30秒，不加锁）
@@ -367,30 +386,32 @@ void Server::stop_accepting()
         return;
     }
 
-    for (size_t i = 0; i < listen_fds_.size(); ++i) {
-        int fd = listen_fds_[i];
-        // 先从MsgCenter移除fd
-        msg_center_->remove_listen_fd(fd);
-        // 再关闭fd
+    for (int fd : listen_fds_) {
         if (fd >= 0) {
+            // 先从MsgCenter移除fd
+            msg_center_->remove_listen_fd(fd);
+            // 再关闭fd
             ::close(fd);
         }
     }
+    // 清空列表（不保留标记为-1的元素）
+    listen_fds_.clear();
 }
 
 void Server::wait_pending_requests()
 {
     auto start = std::chrono::steady_clock::now();
     while (true) {
-        // 注意：设计文档要求调用check_callback_timeouts，
-        // 但ConnectionManager实际提供的是check_timeouts接口
+        // 修复线程安全问题：使用ConnectionManager提供的两个方法分别安全处理超时
+        // 避免直接在check_timeouts回调中调用conn.close()
         if (conn_manager_) {
-            conn_manager_->check_timeouts(
-                MAX_CALLBACK_TIMEOUT_SECONDS * 1000,
-                MAX_CALLBACK_TIMEOUT_SECONDS * 1000,
-                [](Connection& conn) {
-                    conn.close();
-                });
+            // 1. 先通过check_timeouts收集超时连接，但不立即关闭，而是标记
+            // 2. 使用for_each_connection安全地关闭需要关闭的连接
+            // 更简单的方式：直接使用check_callback_timeouts()处理回调超时，
+            // 而空闲超时在close_all_connections阶段统一处理
+
+            // 安全处理回调超时
+            conn_manager_->check_callback_timeouts(MAX_CALLBACK_TIMEOUT_SECONDS);
         }
 
         // 判断所有请求处理完成
@@ -438,18 +459,20 @@ void Server::close_all_connections()
 
 void Server::cleanup_resources()
 {
+    // 避免重复清理
+    bool expected = false;
+    if (!resources_cleaned_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
     // 停止MsgCenter
     if (msg_center_) {
         msg_center_->stop();
     }
 
-    // 清空监听socket列表（socket已在stop_accepting中关闭）
-    listen_fds_.clear();
-    listen_ports_.clear();
-    listen_ips_.clear();
-
     // 设置运行标志为false
     running_ = false;
+    graceful_shutdown_ = false;
 }
 
 void Server::rollback_listen_sockets()

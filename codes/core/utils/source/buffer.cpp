@@ -127,11 +127,38 @@ char Buffer::read_char() {
     return value;
 }
 
+uint8_t Buffer::read_uint8(bool& success) {
+    if (readable_bytes() < 1) {
+        success = false;
+        return 0;
+    }
+    success = true;
+    return read_uint8();
+}
+
+char Buffer::read_char(bool& success) {
+    if (readable_bytes() < 1) {
+        success = false;
+        return 0;
+    }
+    success = true;
+    return read_char();
+}
+
 uint16_t Buffer::read_uint16_be() {
     uint8_t buf[2] = {0};
     read(buf, 2);
     return (static_cast<uint16_t>(buf[0]) << 8) |
            static_cast<uint16_t>(buf[1]);
+}
+
+uint16_t Buffer::read_uint16_be(bool& success) {
+    if (readable_bytes() < 2) {
+        success = false;
+        return 0;
+    }
+    success = true;
+    return read_uint16_be();
 }
 
 uint32_t Buffer::read_uint32_be() {
@@ -141,6 +168,15 @@ uint32_t Buffer::read_uint32_be() {
            (static_cast<uint32_t>(buf[1]) << 16) |
            (static_cast<uint32_t>(buf[2]) << 8) |
            static_cast<uint32_t>(buf[3]);
+}
+
+uint32_t Buffer::read_uint32_be(bool& success) {
+    if (readable_bytes() < 4) {
+        success = false;
+        return 0;
+    }
+    success = true;
+    return read_uint32_be();
 }
 
 uint64_t Buffer::read_uint64_be() {
@@ -154,6 +190,15 @@ uint64_t Buffer::read_uint64_be() {
            (static_cast<uint64_t>(buf[5]) << 16) |
            (static_cast<uint64_t>(buf[6]) << 8) |
            static_cast<uint64_t>(buf[7]);
+}
+
+uint64_t Buffer::read_uint64_be(bool& success) {
+    if (readable_bytes() < 8) {
+        success = false;
+        return 0;
+    }
+    success = true;
+    return read_uint64_be();
 }
 
 size_t Buffer::peek(uint8_t* data, size_t len) const {
@@ -173,6 +218,15 @@ uint8_t Buffer::peek_uint8(size_t offset) const {
     if (offset >= readable_bytes()) {
         return 0;
     }
+    return data_[read_idx_ + offset];
+}
+
+uint8_t Buffer::peek_uint8(size_t offset, bool& success) const {
+    if (offset >= readable_bytes()) {
+        success = false;
+        return 0;
+    }
+    success = true;
     return data_[read_idx_ + offset];
 }
 

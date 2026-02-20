@@ -511,7 +511,7 @@ TEST(ConnectionTest, CloseInvokesProtocolHandlerClose) {
 // ConnMgr_UT_001: 创建连接
 TEST(ConnectionManagerTest, CreateConnectionReturnsValidPointer) {
     ConnectionManager manager;
-    Connection* conn = manager.create_connection(TEST_FD_1, TEST_PORT);
+    auto conn = manager.create_connection(TEST_FD_1, TEST_PORT);
     EXPECT_NE(conn, nullptr);
     EXPECT_GE(conn->get_id(), 1ULL);
 }
@@ -519,28 +519,28 @@ TEST(ConnectionManagerTest, CreateConnectionReturnsValidPointer) {
 // ConnMgr_UT_002: 查找存在的连接
 TEST(ConnectionManagerTest, GetExistingConnection) {
     ConnectionManager manager;
-    Connection* conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
+    auto conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
     uint64_t id = conn1->get_id();
 
-    Connection* conn2 = manager.get_connection(id);
+    auto conn2 = manager.get_connection(id);
     EXPECT_EQ(conn1, conn2);
 }
 
 // ConnMgr_UT_003: 查找不存在的连接
 TEST(ConnectionManagerTest, GetNonExistentConnectionReturnsNull) {
     ConnectionManager manager;
-    Connection* conn = manager.get_connection(99999);
+    auto conn = manager.get_connection(99999);
     EXPECT_EQ(conn, nullptr);
 }
 
 // ConnMgr_UT_004: 删除连接
 TEST(ConnectionManagerTest, RemoveConnectionDeletesIt) {
     ConnectionManager manager;
-    Connection* conn = manager.create_connection(TEST_FD_1, TEST_PORT);
+    auto conn = manager.create_connection(TEST_FD_1, TEST_PORT);
     uint64_t id = conn->get_id();
 
     manager.remove_connection(id);
-    Connection* found = manager.get_connection(id);
+    auto found = manager.get_connection(id);
     EXPECT_EQ(found, nullptr);
 }
 
@@ -573,9 +573,9 @@ TEST(ConnectionManagerTest, ForEachConnectionIteratesAll) {
 // 测试for_each_connection在回调中修改连接表 (CONN-010)
 TEST(ConnectionManagerTest, ForEachConnectionSafeToModifyInCallback) {
     ConnectionManager manager;
-    Connection* conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
-    Connection* conn2 = manager.create_connection(TEST_FD_2, TEST_PORT);
-    Connection* conn3 = manager.create_connection(TEST_FD_3, TEST_PORT);
+    auto conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
+    auto conn2 = manager.create_connection(TEST_FD_2, TEST_PORT);
+    auto conn3 = manager.create_connection(TEST_FD_3, TEST_PORT);
     uint64_t id1 = conn1->get_id();
     uint64_t id2 = conn2->get_id();
     [[maybe_unused]] uint64_t id3 = conn3->get_id();
@@ -615,8 +615,8 @@ TEST(ConnectionManagerTest, CheckTimeoutsDetectsAndCallsback) {
     ConnectionManager manager(std::move(mockTime));
 
     // 创建两个连接
-    Connection* conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
-    Connection* conn2 = manager.create_connection(TEST_FD_2, TEST_PORT);
+    auto conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
+    auto conn2 = manager.create_connection(TEST_FD_2, TEST_PORT);
 
     // 让时间前进，使 conn1 超时（先更新 conn2 的活动时间）
     timePtr->advance_time(100);
@@ -641,9 +641,9 @@ TEST(ConnectionManagerTest, CheckTimeoutsSafeToRemoveConnectionInCallback) {
     ConnectionManager manager(std::move(mockTime));
 
     // 创建多个连接
-    Connection* conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
-    Connection* conn2 = manager.create_connection(TEST_FD_2, TEST_PORT);
-    Connection* conn3 = manager.create_connection(TEST_FD_3, TEST_PORT);
+    auto conn1 = manager.create_connection(TEST_FD_1, TEST_PORT);
+    auto conn2 = manager.create_connection(TEST_FD_2, TEST_PORT);
+    auto conn3 = manager.create_connection(TEST_FD_3, TEST_PORT);
     uint64_t id1 = conn1->get_id();
     uint64_t id2 = conn2->get_id();
     uint64_t id3 = conn3->get_id();
@@ -704,7 +704,7 @@ TEST(ConnectionManagerTest, UseInjectedTimeSource) {
     ConnectionManager manager(std::move(mockTime));
 
     timePtr->set_time(12345);
-    Connection* conn = manager.create_connection(TEST_FD_1, TEST_PORT);
+    auto conn = manager.create_connection(TEST_FD_1, TEST_PORT);
 
     timePtr->set_time(12345 + 500);
     EXPECT_FALSE(conn->is_timeout(1000));
@@ -719,7 +719,7 @@ TEST(ConnectionManagerTest, CallbackTimeoutDetection) {
     MockTimeSource* timePtr = mockTime.get();
     ConnectionManager manager(std::move(mockTime));
 
-    Connection* conn = manager.create_connection(TEST_FD_1, TEST_PORT);
+    auto conn = manager.create_connection(TEST_FD_1, TEST_PORT);
     conn->set_callback_start_time();
 
     timePtr->advance_time(500);
@@ -791,6 +791,7 @@ TEST(ConnectionManagerTest, ForEachConnectionConstOverloadWorks) {
 }
 
 // 测试 timeout_ms 为 0 的边界情况 (CONN-008)
+// timeout_ms=0 表示永不超时
 TEST(ConnectionTest, TimeoutMsZeroBoundaryCase) {
     auto mockTime = std::make_unique<MockTimeSource>();
     MockTimeSource* timePtr = mockTime.get();
@@ -803,9 +804,13 @@ TEST(ConnectionTest, TimeoutMsZeroBoundaryCase) {
     // 时间相同不超时 (timeout_ms=0)
     EXPECT_FALSE(conn.is_timeout(0));
 
-    // 时间前进 1ms，超时 (timeout_ms=0)
+    // 时间前进 1ms，不超时 (timeout_ms=0 表示永不超时)
     timePtr->set_time(1001);
-    EXPECT_TRUE(conn.is_timeout(0));
+    EXPECT_FALSE(conn.is_timeout(0));
+
+    // 时间前进很大值，仍不超时 (timeout_ms=0)
+    timePtr->set_time(1000000);
+    EXPECT_FALSE(conn.is_timeout(0));
 
     // 测试回调超时
     timePtr->set_time(2000);
@@ -814,9 +819,13 @@ TEST(ConnectionTest, TimeoutMsZeroBoundaryCase) {
     // 时间相同不超时 (timeout_ms=0)
     EXPECT_FALSE(conn.is_callback_timeout(0));
 
-    // 时间前进 1ms，超时 (timeout_ms=0)
+    // 时间前进 1ms，不超时 (timeout_ms=0 表示永不超时)
     timePtr->set_time(2001);
-    EXPECT_TRUE(conn.is_callback_timeout(0));
+    EXPECT_FALSE(conn.is_callback_timeout(0));
+
+    // 时间前进很大值，仍不超时 (timeout_ms=0)
+    timePtr->set_time(2000000);
+    EXPECT_FALSE(conn.is_callback_timeout(0));
 }
 
 } // namespace https_server_sim

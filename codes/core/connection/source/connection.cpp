@@ -79,12 +79,12 @@ Connection::Connection(uint64_t id, int fd, uint16_t server_port,
 Connection::~Connection() {
     // Buffer和ProtocolHandler由unique_ptr自动释放
     // 确保fd已关闭
-    // 注意：只关闭大于等于3的fd，避免关闭stdin(0)/stdout(1)/stderr(2)
-    if (fd_ >= 3) {
+    close_fd();
+}
+
+void Connection::close_fd() {
+    if (fd_ >= 0) {
         ::close(fd_);
-        fd_ = -1;
-    } else if (fd_ >= 0) {
-        // 对于0-2的fd（测试中常用），只标记为-1，不实际close
         fd_ = -1;
     }
 }
@@ -170,10 +170,14 @@ void Connection::update_last_activity() {
 }
 
 // 检查是否空闲超时
-// 参数: timeout_ms - 超时时间（毫秒），若为0则只要有时间差就会超时
+// 参数: timeout_ms - 超时时间（毫秒），若为0表示永不超时
 // 返回: true表示超时，false表示未超时；DISCONNECTED状态始终返回false
 bool Connection::is_timeout(uint32_t timeout_ms) const {
     if (state_ == ConnectionState::DISCONNECTED) {
+        return false;
+    }
+    if (timeout_ms == 0) {
+        // timeout_ms为0时，表示永不超时
         return false;
     }
     uint64_t current_time = time_source_->get_current_time_ms();
@@ -186,10 +190,14 @@ void Connection::set_callback_start_time() {
 }
 
 // 检查回调是否超时
-// 参数: timeout_ms - 超时时间（毫秒），若为0则只要有时间差就会超时
+// 参数: timeout_ms - 超时时间（毫秒），若为0表示永不超时
 // 返回: true表示超时，false表示未超时；不在回调中时始终返回false
 bool Connection::is_callback_timeout(uint32_t timeout_ms) const {
     if (!in_callback_) {
+        return false;
+    }
+    if (timeout_ms == 0) {
+        // timeout_ms为0时，表示永不超时
         return false;
     }
     uint64_t current_time = time_source_->get_current_time_ms();
@@ -239,14 +247,7 @@ void Connection::close() {
     }
 
     // 关闭fd
-    // 注意：只关闭大于等于3的fd，避免关闭stdin(0)/stdout(1)/stderr(2)
-    if (fd_ >= 3) {
-        ::close(fd_);
-        fd_ = -1;
-    } else if (fd_ >= 0) {
-        // 对于0-2的fd（测试中常用），只标记为-1，不实际close
-        fd_ = -1;
-    }
+    close_fd();
 
     transition_to(ConnectionState::DISCONNECTED);
 }

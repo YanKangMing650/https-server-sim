@@ -410,6 +410,30 @@ TEST_F(WorkerPoolTest, ConditionVariableWakeup) {
     EXPECT_LT(diff.count(), 50);  // 放宽到50ms以适应不同测试环境
 }
 
+// MsgCenter_UseCase018: 重要修复：stop()时确保队列中所有任务都被处理
+TEST_F(WorkerPoolTest, ProcessAllTasksOnStop) {
+    WorkerPool pool(1, nullptr);  // 使用单线程，便于确保任务排队
+    const int task_count = 10;
+    std::atomic<int> executed_count{0};
+
+    pool.start();
+
+    // 先投递多个任务
+    for (int i = 0; i < task_count; ++i) {
+        pool.post_task([&executed_count]() {
+            // 每个任务执行一点时间，确保stop()被调用时队列中还有任务
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            executed_count++;
+        });
+    }
+
+    // 立即调用stop()，不要等待所有任务完成
+    pool.stop();
+
+    // 验证：所有任务都被执行了
+    EXPECT_EQ(executed_count.load(), task_count);
+}
+
 // ==================== MsgCenter测试 ====================
 
 class MsgCenterTest : public ::testing::Test {

@@ -1,3 +1,9 @@
+// =============================================================================
+//  HTTPS Server Simulator - Utils Module
+//  文件: buffer.hpp
+//  描述: 动态缓冲区类定义
+//  版权: Copyright (c) 2026
+// =============================================================================
 #pragma once
 
 #include <cstdint>
@@ -7,20 +13,19 @@
 namespace https_server_sim {
 namespace utils {
 
+/**
+ * @brief 动态缓冲区类
+ * @note 线程安全说明：Buffer 类不是线程安全的。如果需要在多线程环境中使用，
+ *       调用方必须负责使用外部同步机制（如 mutex）来保护对 Buffer 的访问。
+ */
 class Buffer {
 public:
-    // 默认初始容量：8KB，适合大多数HTTP请求/响应场景
-    static constexpr size_t DEFAULT_INITIAL_CAPACITY = 8192;
-    // 最小容量：1KB，避免过小的缓冲区导致频繁扩容
-    static constexpr size_t MIN_CAPACITY = 1024;
-    // 最大容量：64MB，防止单个缓冲区占用过多内存
-    static constexpr size_t MAX_CAPACITY = 64 * 1024 * 1024;
-    // 扩容阈值1（64KB）：小于该值时翻倍扩容，快速增长以适应小数据
-    static constexpr size_t GROWTH_THRESHOLD_DOUBLE = 64 * 1024;
-    // 扩容阈值2（1MB）：小于该值时1.5倍扩容，平衡内存和性能
-    static constexpr size_t GROWTH_THRESHOLD_15X = 1024 * 1024;
-    // 线性扩容增量：超过1MB后每次增加256KB，避免内存浪费
-    static constexpr size_t GROWTH_LINEAR_INCREMENT = 256 * 1024;
+    static constexpr size_t DEFAULT_INITIAL_CAPACITY = 8192;  // 默认初始容量
+    static constexpr size_t MIN_CAPACITY = 1024;              // 最小容量
+    static constexpr size_t MAX_CAPACITY = 64 * 1024 * 1024;  // 最大容量
+    static constexpr size_t GROWTH_THRESHOLD_DOUBLE = 64 * 1024;  // 翻倍扩容阈值
+    static constexpr size_t GROWTH_THRESHOLD_15X = 1024 * 1024;   // 1.5倍扩容阈值
+    static constexpr size_t GROWTH_LINEAR_INCREMENT = 256 * 1024;  // 线性扩容增量
 
     // 构造函数
     // initial_capacity: 初始容量，默认8KB
@@ -44,6 +49,11 @@ public:
     size_t write(const uint8_t* data, size_t len);
     size_t write(const char* data, size_t len);
 
+    // 写入std::string（便捷方法）
+    size_t write(const std::string& str) {
+        return write(str.data(), str.size());
+    }
+
     // 写入单个字节
     size_t write_uint8(uint8_t value);
     size_t write_char(char value);
@@ -66,21 +76,58 @@ public:
     size_t read(uint8_t* data, size_t len);
     size_t read(char* data, size_t len);
 
+    // 读取数据到std::string（便捷方法）
+    // len: 要读取的字节数，0表示读取所有可读数据
+    size_t read_to_string(std::string* out, size_t len = 0) {
+        if (out == nullptr) {
+            return 0;
+        }
+        size_t to_read = (len == 0) ? readable_bytes() : std::min(len, readable_bytes());
+        if (to_read == 0) {
+            out->clear();
+            return 0;
+        }
+        out->resize(to_read);
+        return read(reinterpret_cast<uint8_t*>(&(*out)[0]), to_read);
+    }
+
     // 读取单个字节，移动读指针
+    // 注意：数据不足时静默返回0，建议使用带success参数的版本
     uint8_t read_uint8();
     char read_char();
 
+    // 读取单个字节（安全版本），移动读指针
+    // success: [out] 是否成功读取
+    // return: 读取的数据（仅当success为true时有效）
+    uint8_t read_uint8(bool& success);
+    char read_char(bool& success);
+
     // 读取16位/32位/64位整数（网络字节序），移动读指针
+    // 注意：数据不足时静默返回0，建议使用带success参数的版本
     uint16_t read_uint16_be();
     uint32_t read_uint32_be();
     uint64_t read_uint64_be();
+
+    // 读取16位/32位/64位整数（网络字节序，安全版本），移动读指针
+    // success: [out] 是否成功读取
+    // return: 读取的数据（仅当success为true时有效）
+    uint16_t read_uint16_be(bool& success);
+    uint32_t read_uint32_be(bool& success);
+    uint64_t read_uint64_be(bool& success);
 
     // 查看数据（不移动读指针）
     size_t peek(uint8_t* data, size_t len) const;
     size_t peek(char* data, size_t len) const;
 
     // 查看指定偏移处的数据
+    // 注意：偏移越界时静默返回0，建议使用带success参数的版本
     uint8_t peek_uint8(size_t offset = 0) const;
+
+    // 查看指定偏移处的数据（安全版本）
+    // offset: 偏移量
+    // success: [out] 是否成功读取
+    // return: 读取的数据（仅当success为true时有效）
+    uint8_t peek_uint8(size_t offset, bool& success) const;
 
     // ========== 指针操作 ==========
 

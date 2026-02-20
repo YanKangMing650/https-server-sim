@@ -21,7 +21,21 @@
 namespace https_server_sim {
 namespace server {
 
-// Server错误码
+// Server错误码（与MsgCenter模块一致的枚举风格）
+enum class ServerError : int {
+    SUCCESS = 0,
+    INVALID_STATE = -1,
+    CONFIG_LOAD = -2,
+    CONFIG_VALIDATE = -3,
+    SOCKET_CREATE = -4,
+    SOCKET_BIND = -5,
+    SOCKET_LISTEN = -6,
+    MSG_CENTER_START = -7,
+    INVALID_ARGUMENT = -8,
+    INTERNAL = -9
+};
+
+// 保持兼容的常量定义
 constexpr int ERR_SUCCESS = 0;
 constexpr int ERR_INVALID_STATE = -1;
 constexpr int ERR_CONFIG_LOAD = -2;
@@ -147,6 +161,17 @@ private:
      */
     void rollback_listen_sockets();
 
+    /**
+     * @brief 处理初始化错误（公共错误恢复路径）
+     */
+    void handle_init_error();
+
+    /**
+     * @brief 设置Server状态（线程安全）
+     * @param new_status 新状态
+     */
+    void set_status(ServerStatusEnum new_status);
+
     // ==================== 成员变量 ====================
 
     std::unique_ptr<config::Config> config_;
@@ -160,11 +185,11 @@ private:
     ServerStatusEnum status_;
     std::atomic<bool> running_;
     std::atomic<bool> graceful_shutdown_;
+    std::atomic<bool> resources_cleaned_;
 
     std::chrono::steady_clock::time_point start_time_;
 
     mutable std::mutex mutex_;
-    std::atomic<bool> cleaned_up_;
 
     // 超时常量
     static constexpr int MAX_CALLBACK_TIMEOUT_SECONDS = 30;

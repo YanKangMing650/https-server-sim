@@ -479,6 +479,27 @@ TEST(StatisticsTest, RecordConnectionClose) {
     EXPECT_EQ(mgr.current_connections(), 2u);
 }
 
+TEST(StatisticsTest, RecordConnectionCloseNoUnderflow) {
+    StatisticsManager& mgr = StatisticsManager::instance();
+    mgr.reset();
+    // 当前连接数为 0
+    EXPECT_EQ(mgr.current_connections(), 0u);
+    // 尝试关闭连接 - 不应该下溢
+    mgr.record_connection_close();
+    EXPECT_EQ(mgr.current_connections(), 0u);
+    // 再试一次
+    mgr.record_connection_close();
+    EXPECT_EQ(mgr.current_connections(), 0u);
+    // 增加一个连接后再关闭
+    mgr.record_connection();
+    EXPECT_EQ(mgr.current_connections(), 1u);
+    mgr.record_connection_close();
+    EXPECT_EQ(mgr.current_connections(), 0u);
+    // 再次关闭 - 不应下溢
+    mgr.record_connection_close();
+    EXPECT_EQ(mgr.current_connections(), 0u);
+}
+
 TEST(StatisticsTest, RecordRequest) {
     StatisticsManager& mgr = StatisticsManager::instance();
     mgr.reset();

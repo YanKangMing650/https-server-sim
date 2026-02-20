@@ -27,7 +27,12 @@ bool EventQueue::push(const Event& event) {
         return false;
     }
 
+    // 校验event.type的取值范围，防止越界访问
     size_t priority = static_cast<size_t>(event.type);
+    if (priority >= kEventPriorityCount) {
+        return false;
+    }
+
     priority_queues_[priority].push(event);
     ++size_;
 

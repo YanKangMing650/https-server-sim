@@ -73,7 +73,7 @@ void WorkerPool::set_post_callback_done(bool enable) {
 }
 
 void WorkerPool::worker_thread() {
-    while (running_.load(std::memory_order_acquire)) {
+    while (true) {
         std::function<void()> task;
         bool has_task = false;
 
@@ -84,22 +84,22 @@ void WorkerPool::worker_thread() {
             // 注意：wait谓词在锁保护下执行，可以安全读取task_queue_
             task_cv_.wait(lock, [this]() {
                 // 在锁保护下检查队列，running_和queue_closed_用原子读取
+                // 只要队列非空，或者队列关闭且不运行了，就返回
                 return !task_queue_.empty() ||
-                       !running_.load(std::memory_order_acquire) ||
-                       queue_closed_.load(std::memory_order_acquire);
+                       queue_closed_.load(std::memory_order_acquire) ||
+                       !running_.load(std::memory_order_acquire);
             });
 
-            // 检查是否应该退出
-            if (!running_.load(std::memory_order_acquire) ||
-                queue_closed_.load(std::memory_order_acquire)) {
-                break;
-            }
-
-            // 获取任务
+            // 先尝试获取任务（即使已经停止，也要处理完队列中剩余的任务）
             if (!task_queue_.empty()) {
                 task = std::move(task_queue_.front());
                 task_queue_.pop();
                 has_task = true;
+            }
+
+            // 只有当队列已空且不再运行时，才退出循环
+            if (!has_task && !running_.load(std::memory_order_acquire)) {
+                break;
             }
         }
 
@@ -107,9 +107,12 @@ void WorkerPool::worker_thread() {
         if (has_task) {
             try {
                 task();
+            } catch (const std::exception& e) {
+                // 捕获标准异常，记录详细信息
+                LOG_ERROR("WorkerPool", "Task threw exception: %s", e.what());
             } catch (...) {
-                // 捕获所有异常，记录日志
-                LOG_ERROR("WorkerPool", "Task threw exception");
+                // 捕获所有其他异常
+                LOG_ERROR("WorkerPool", "Task threw unknown exception");
             }
 
             // 任务执行完成后，可选投递CALLBACK_DONE事件

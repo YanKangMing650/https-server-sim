@@ -199,7 +199,7 @@ TEST_F(DebugChainTest, ConfigEnabledFalse) {
     DebugContext debug_ctx;
 
     int ret = chain.process_request(&client_ctx, &config, &debug_ctx);
-    EXPECT_EQ(ret, DebugChain::kRetContinueChain);
+    EXPECT_EQ(ret, DebugChain::kRetNotExecuted);
 }
 
 TEST_F(DebugChainTest, RegisterNullptrReturnsInvalidParam) {

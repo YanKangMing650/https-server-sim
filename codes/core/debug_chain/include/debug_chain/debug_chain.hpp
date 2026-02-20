@@ -30,13 +30,23 @@ namespace debug_chain {
 //   - 调用方必须保证注册/注销与执行操作不并发
 class DebugChain {
 public:
-    // ========== C++接口返回值常量（constexpr版本） ==========
-    static constexpr int kRetSuccess = 0;           // 操作成功
-    static constexpr int kRetInvalidParam = -1;      // 参数无效
-    static constexpr int kRetNotFound = -2;           // 未找到
-    static constexpr int kRetAlreadyExists = -3;      // 已存在
-    static constexpr int kRetContinueChain = 0;       // 继续执行链
-    static constexpr int kRetStopChain = 1;           // 终止链执行
+    // ========== C++接口返回值常量（与C接口宏数值一致） ==========
+    static constexpr int ERR_SUCCESS = 0;              // 操作成功
+    static constexpr int ERR_INVALID_PARAM = -1;       // 参数无效
+    static constexpr int ERR_NOT_FOUND = -2;           // 未找到
+    static constexpr int ERR_ALREADY_EXISTS = -3;      // 已存在
+    static constexpr int ERR_CONTINUE_CHAIN = 0;       // 继续执行链
+    static constexpr int ERR_STOP_CHAIN = 1;           // 终止链执行
+    static constexpr int ERR_NOT_EXECUTED = 2;         // 配置未启用，未执行handler
+
+    // ========== 兼容旧名称（过渡期使用，后续可删除） ==========
+    static constexpr int kRetSuccess = ERR_SUCCESS;
+    static constexpr int kRetInvalidParam = ERR_INVALID_PARAM;
+    static constexpr int kRetNotFound = ERR_NOT_FOUND;
+    static constexpr int kRetAlreadyExists = ERR_ALREADY_EXISTS;
+    static constexpr int kRetContinueChain = ERR_CONTINUE_CHAIN;
+    static constexpr int kRetStopChain = ERR_STOP_CHAIN;
+    static constexpr int kRetNotExecuted = ERR_NOT_EXECUTED;
 
     // 构造函数
     DebugChain();
@@ -86,6 +96,13 @@ private:
     // 按priority升序排序调测点
     void sort_handlers();
 
+    // 私有模板方法：处理请求/响应的公共逻辑
+    template<typename HandlerFunc>
+    int process_internal(const ClientContext* ctx,
+                         const DebugConfig* config,
+                         DebugContext* debug_ctx,
+                         HandlerFunc handler_func);
+
     std::vector<DebugHandler*> handlers_;  // 调测点列表
     bool sorted_;                           // 是否已排序
 };
@@ -111,9 +128,15 @@ typedef struct DebugHandlerRegistry DebugHandlerRegistry;
 #define DEBUG_HANDLER_REGISTRY_NOT_FOUND      -2  // 对应kRetNotFound
 #define DEBUG_HANDLER_REGISTRY_ALREADY_EXISTS -3  // 对应kRetAlreadyExists
 
-// 创建DebugHandlerRegistry实例
+// 创建DebugHandlerRegistry实例（自动注册4个默认Handler）
 // 内部自动注册4个默认Handler（DelayHandler、DisconnectHandler、LogHandler、ErrorCodeHandler）
+// 【行为说明】：此函数会自动注册默认handler是设计行为，方便快速使用
+// 若不需要自动注册，请使用 debug_handler_registry_create_empty()
 DebugHandlerRegistry* debug_handler_registry_create(void);
+
+// 创建空的DebugHandlerRegistry实例（不自动注册默认Handler）
+// 【使用场景】：需要完全控制handler注册顺序或仅需特定handler的场景
+DebugHandlerRegistry* debug_handler_registry_create_empty(void);
 
 // 销毁DebugHandlerRegistry实例
 // 内部调用所有已注册Handler的destroy()函数
