@@ -1,0 +1,50 @@
+{
+    "self": {
+        "ip": "127.0.0.1",
+        "port": 20001,
+        "tls": {
+            "enabled": true,
+            "version": "1.2",
+            "cert_path": "",
+            "key_path": "",
+            "ca_path": "",
+            "cipher_suite": "TLS_AES_256_GCM_SHA384"
+        },
+        "auto_offline_seconds": 300
+    },
+    "target_server": {
+        "ip": "127.0.0.1",
+        "port": 19443
+    },
+    "messages": [
+        {
+            "request": {
+                "method": "POST",
+                "path": "/api/test",
+                "headers": {
+                    "Content-Type": "application/json",
+                    "User-Agent": "SimClient/1.0"
+                },
+                "body": "{\"key\": \"value\", \"test\": true}"
+            },
+            "debug": {
+                "force_error_code": 0,
+                "response_timeout_ms": 5000
+            }
+        },
+        {
+            "request": {
+                "method": "GET",
+                "path": "/health",
+                "headers": {
+                    "User-Agent": "SimClient/1.0"
+                },
+                "body": ""
+            },
+            "debug": {
+                "force_error_code": 0,
+                "response_timeout_ms": 5000
+            }
+        }
+    ]
+}

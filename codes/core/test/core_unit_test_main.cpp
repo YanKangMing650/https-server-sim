@@ -1,6 +1,6 @@
 // =============================================================================
-//  HTTPS Server Simulator - Core Test Main
-//  文件: test_main.cpp
+//  HTTPS Server Simulator - Core Unit Test Main
+//  文件: core_unit_test_main.cpp
 //  描述: 核心模块单元测试主入口
 //  版权: Copyright (c) 2026
 // =============================================================================

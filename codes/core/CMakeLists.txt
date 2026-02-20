@@ -18,7 +18,7 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# 初始化测试源文件列表
+# 初始化测试源文件列表（仅当BUILD_TESTS开启时）
 set(CORE_TEST_SOURCES "")
 
 # 添加子模块
@@ -60,37 +60,7 @@ add_subdirectory(server)
 #         ${CMAKE_CURRENT_SOURCE_DIR}/utils/include
 # )
 
-# 编译测试用例（默认编译）
-if(CORE_TEST_SOURCES)
-    # 添加gtest
-    add_library(gtest STATIC
-        ${THIRD_PARTY_DIR}/googletest/googletest/src/gtest-all.cc
-    )
-    target_include_directories(gtest
-        PUBLIC
-            ${THIRD_PARTY_DIR}/googletest/googletest
-            ${THIRD_PARTY_DIR}/googletest/googletest/include
-    )
-
-    # 编译core_test可执行文件
-    add_executable(core_test ${CORE_TEST_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp)
-    target_link_libraries(core_test
-        PRIVATE
-            server
-            connection
-            protocol
-            msg_center
-            callback
-            debug_chain
-            config
-            utils
-            gtest
-            pthread
-    )
-endif()
-
-# 添加集成测试
-option(BUILD_INTEGRATION_TESTS "Build integration tests" ON)
-if(BUILD_INTEGRATION_TESTS)
-    add_subdirectory(test/integration_tests)
+# 添加test目录（包含单元测试和集成测试，仅当BUILD_TESTS开启时）
+if(BUILD_TESTS)
+    add_subdirectory(test)
 endif()
