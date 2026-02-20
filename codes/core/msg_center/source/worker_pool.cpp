@@ -59,6 +59,10 @@ void WorkerPool::stop() {
 void WorkerPool::post_task(std::function<void()> task) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        // 队列关闭后不再接受新任务
+        if (queue_closed_.load(std::memory_order_acquire)) {
+            return;
+        }
         task_queue_.push(std::move(task));
     }
     task_cv_.notify_one();
@@ -86,7 +90,8 @@ void WorkerPool::worker_thread() {
                 // 在锁保护下检查队列，running_和queue_closed_用原子读取
                 // 只要队列非空，或者队列关闭且不运行了，就返回
                 return !task_queue_.empty() ||
-                       queue_closed_.load(std::memory_order_acquire) ||
+                       (queue_closed_.load(std::memory_order_acquire) &&
+                        !running_.load(std::memory_order_acquire)) ||
                        !running_.load(std::memory_order_acquire);
             });
 
@@ -98,6 +103,7 @@ void WorkerPool::worker_thread() {
             }
 
             // 只有当队列已空且不再运行时，才退出循环
+            // 注意：即使 queue_closed_ 为 true，只要队列还有任务且 running_ 为 true，我们就继续处理
             if (!has_task && !running_.load(std::memory_order_acquire)) {
                 break;
             }

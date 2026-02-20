@@ -22,6 +22,11 @@ EventQueue::~EventQueue() = default;
 bool EventQueue::push(const Event& event) {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // 队列关闭后不再接受新事件
+    if (queue_closed_.load(std::memory_order_acquire)) {
+        return false;
+    }
+
     // 使用size_检查队列满（在锁保护下访问）
     if (size_ >= max_size_) {
         return false;
@@ -118,11 +123,17 @@ bool EventQueue::is_closed() const {
 }
 
 void EventQueue::wake_up() {
+    // 唤醒等待的线程并关闭队列（确保pop()不会永久阻塞）
     {
         std::lock_guard<std::mutex> lock(mutex_);
         queue_closed_.store(true, std::memory_order_release);
     }
     not_empty_.notify_all();
+}
+
+void EventQueue::close() {
+    // wake_up 和 close 目前行为相同，但语义上 close() 表示永久关闭
+    wake_up();
 }
 
 int EventQueue::get_highest_priority_queue() const {

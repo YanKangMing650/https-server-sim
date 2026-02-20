@@ -576,13 +576,13 @@ TEST(StatisticsTest, Reset) {
 // Config模块测试用例
 // =============================================================================
 
-TEST(ConfigTest, CreateDefault) {
+TEST(UtilsConfigTest, CreateDefault) {
     Config cfg;
     EXPECT_EQ(cfg.get_server().listen_port, 8443);
     EXPECT_EQ(cfg.get_server().listen_ip, "0.0.0.0");
 }
 
-TEST(ConfigTest, LoadFromStringValid) {
+TEST(UtilsConfigTest, LoadFromStringValid) {
     Config cfg;
     std::string json_str = R"({
         "server": {
@@ -594,20 +594,20 @@ TEST(ConfigTest, LoadFromStringValid) {
     EXPECT_EQ(cfg.get_server().listen_port, 9000);
 }
 
-TEST(ConfigTest, LoadFromStringInvalid) {
+TEST(UtilsConfigTest, LoadFromStringInvalid) {
     Config cfg;
     auto result = cfg.load_from_string("invalid json");
     EXPECT_TRUE(result.is_err());
     EXPECT_EQ(result.error_code(), ErrorCode::CONFIG_PARSE_ERROR);
 }
 
-TEST(ConfigTest, ValidateSuccess) {
+TEST(UtilsConfigTest, ValidateSuccess) {
     Config cfg;
     auto result = cfg.validate();
     EXPECT_TRUE(result.is_ok());
 }
 
-TEST(ConfigTest, ValidateInvalidPort) {
+TEST(UtilsConfigTest, ValidateInvalidPort) {
     Config cfg;
     ServerConfig sc;
     sc.listen_port = 0;
@@ -617,7 +617,7 @@ TEST(ConfigTest, ValidateInvalidPort) {
     EXPECT_EQ(result.error_code(), ErrorCode::CONFIG_INVALID_PORT);
 }
 
-TEST(ConfigTest, ValidateInvalidThreadCount) {
+TEST(UtilsConfigTest, ValidateInvalidThreadCount) {
     Config cfg;
     ServerConfig sc;
     sc.thread_count = 0;
@@ -627,7 +627,7 @@ TEST(ConfigTest, ValidateInvalidThreadCount) {
     EXPECT_EQ(result.error_code(), ErrorCode::CONFIG_INVALID_THREAD_COUNT);
 }
 
-TEST(ConfigTest, ValidateInvalidLogLevel) {
+TEST(UtilsConfigTest, ValidateInvalidLogLevel) {
     Config cfg;
     LoggingConfig lc;
     lc.level = "INVALID";
@@ -637,21 +637,21 @@ TEST(ConfigTest, ValidateInvalidLogLevel) {
     EXPECT_EQ(result.error_code(), ErrorCode::CONFIG_INVALID_LOG_LEVEL);
 }
 
-TEST(ConfigTest, ToJsonString) {
+TEST(UtilsConfigTest, ToJsonString) {
     Config cfg;
     auto result = cfg.to_json_string();
     EXPECT_TRUE(result.is_ok());
     EXPECT_FALSE(result.value().empty());
 }
 
-TEST(ConfigTest, MoveConstruct) {
+TEST(UtilsConfigTest, MoveConstruct) {
     Config cfg1;
     cfg1.get_server();  // 访问一下确保对象有效
     Config cfg2(std::move(cfg1));
     EXPECT_EQ(cfg2.get_server().listen_port, 8443);
 }
 
-TEST(ConfigTest, SetAndGet) {
+TEST(UtilsConfigTest, SetAndGet) {
     Config cfg;
 
     ServerConfig sc;

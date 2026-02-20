@@ -105,6 +105,7 @@ private:
 
     // 唤醒fd
     int wakeup_fd_;    // Linux: eventfd, Mac: pipe write fd
+    int wakeup_read_fd_; // Mac: pipe read fd
 
     // fd到conn_id的映射
     std::unordered_map<int, uint64_t> fd_to_conn_id_;

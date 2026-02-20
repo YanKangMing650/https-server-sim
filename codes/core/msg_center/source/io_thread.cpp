@@ -7,22 +7,42 @@
 #include "msg_center/io_thread.hpp"
 #include <chrono>
 #include <algorithm>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/event.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
 
 namespace https_server_sim {
 
 // ============================================================================
-// 重要设计说明：IoThread实现策略
+//  内部工具函数 (namespace details)
 // ============================================================================
-// 检视意见问题：IoThread实现不完整，仅是桩代码
-//
-// 设计权衡决策：
-// 1. 详细设计文档确实要求实现完整的平台特定IO事件循环（epoll/kqueue/IOCP）
-// 2. 但在当前版本中，采用简化实现策略，原因：
-//    - 完整实现需要大量平台特定代码，会显著增加模块复杂度
-//    - 当前系统的事件驱动模型通过EventLoop和WorkerPool已能满足基本调度需求
-//    - 这是一个有意识的架构简化，而非实现遗漏
-// 3. 保留所有平台特定成员变量和框架代码，便于后续扩展
-// 4. 本实现完全符合"避免过度设计"的架构约束
+namespace details {
+
+/**
+ * @brief 设置文件描述符为非阻塞模式
+ * @param fd 文件描述符
+ * @return true-成功，false-失败
+ */
+inline bool SetNonBlocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1) {
+        return false;
+    }
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        return false;
+    }
+    return true;
+}
+
+} // namespace details
+
+// ============================================================================
+//  IoThread构造函数与析构函数
 // ============================================================================
 
 IoThread::IoThread(int thread_id, EventQueue* event_queue)
@@ -33,18 +53,17 @@ IoThread::IoThread(int thread_id, EventQueue* event_queue)
     , kq_fd_(-1)
     , iocp_handle_(nullptr)
     , wakeup_fd_(-1)
+    , wakeup_read_fd_(-1)
 {
-    // 标记未使用变量（当前为简化实现，保留成员变量以备后续扩展）
-    (void)thread_id_;
-    (void)epoll_fd_;
-    (void)kq_fd_;
-    (void)iocp_handle_;
-    (void)wakeup_fd_;
 }
 
 IoThread::~IoThread() {
     stop();
 }
+
+// ============================================================================
+//  IoThread启动与停止
+// ============================================================================
 
 void IoThread::start() {
     if (running_.load(std::memory_order_acquire)) {
@@ -67,6 +86,10 @@ void IoThread::stop() {
         thread_.join();
     }
 }
+
+// ============================================================================
+//  IoThread fd管理
+// ============================================================================
 
 void IoThread::add_listen_fd(int fd, uint16_t port) {
     std::lock_guard<std::mutex> lock(fd_mutex_);
@@ -122,84 +145,276 @@ void IoThread::remove_fd(int fd) {
     wake_up();
 }
 
-void IoThread::io_thread_func() {
-    // MC-001修复：简化但安全的桩代码实现
-    // 虽然当前不实现完整的平台特定IO事件循环，但增加了安全框架
-    // 未来可根据平台调用 event_loop_linux()、event_loop_mac() 或 event_loop_windows()
+// ============================================================================
+//  IoThread主函数
+// ============================================================================
 
+void IoThread::io_thread_func() {
+    // 根据平台选择事件循环
+#ifdef __APPLE__
+    event_loop_mac();
+#elif defined(__linux__)
+    event_loop_linux();
+#elif defined(_WIN32)
+    event_loop_windows();
+#else
+    // 默认实现：简单轮询
     while (running_.load(std::memory_order_acquire)) {
-        // MC-003修复：验证event_queue_指针有效性，为未来投递事件做准备
         if (event_queue_ == nullptr) {
-            // 无效的event_queue_，继续等待但避免崩溃
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
-
-        // 当前简化实现：定期检查并休眠
-        // 完整实现需要：
-        // 1. 使用epoll/kqueue/IOCP监听fd事件
-        // 2. 检测到事件后通过event_queue_->push()投递事件
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+#endif
 }
 
-void IoThread::event_loop_linux() {
-    // MC-001修复：增加安全检查和框架注释
-    // Linux epoll实现框架（桩代码，预留完整实现位置）
-
-    // 完整实现步骤：
-    // 1. epoll_fd_ = epoll_create1(0)
-    // 2. wakeup_fd_ = eventfd(0, EFD_NONBLOCK)
-    // 3. 注册wakeup_fd_到epoll_fd_
-    // 4. 进入事件循环
-
-    while (running_.load(std::memory_order_acquire)) {
-        // 预留位置：epoll_wait调用
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-}
+// ============================================================================
+//  IoThread macOS kqueue实现
+// ============================================================================
 
 void IoThread::event_loop_mac() {
-    // MC-001修复：增加安全检查和框架注释
-    // macOS kqueue实现框架（桩代码，预留完整实现位置）
+    // 1. 创建kqueue
+    kq_fd_ = kqueue();
+    if (kq_fd_ == -1) {
+        // kqueue创建失败，降级到简单轮询
+        while (running_.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        return;
+    }
 
-    // 完整实现步骤：
-    // 1. kq_fd_ = kqueue()
     // 2. 创建pipe用于唤醒
-    // 3. 注册pipe read fd到kqueue
-    // 4. 进入事件循环
+    int pipe_fds[2];
+    if (pipe(pipe_fds) == -1) {
+        close(kq_fd_);
+        kq_fd_ = -1;
+        while (running_.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        return;
+    }
+
+    wakeup_read_fd_ = pipe_fds[0];
+    wakeup_fd_ = pipe_fds[1];
+
+    // 设置pipe为非阻塞
+    details::SetNonBlocking(wakeup_read_fd_);
+    details::SetNonBlocking(wakeup_fd_);
+
+    // 3. 注册pipe读端到kqueue
+    struct kevent changelist[1];
+    EV_SET(&changelist[0], wakeup_read_fd_, EVFILT_READ, EV_ADD, 0, 0, nullptr);
+
+    if (kevent(kq_fd_, changelist, 1, nullptr, 0, nullptr) == -1) {
+        close(wakeup_read_fd_);
+        close(wakeup_fd_);
+        close(kq_fd_);
+        wakeup_read_fd_ = -1;
+        wakeup_fd_ = -1;
+        kq_fd_ = -1;
+        while (running_.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        return;
+    }
+
+    // 事件循环主逻辑
+    const int kMaxEvents = 64;
+    struct kevent eventlist[kMaxEvents];
 
     while (running_.load(std::memory_order_acquire)) {
-        // 预留位置：kevent调用
+        // 每次循环开始时，重新注册所有fd到kqueue
+        // 这种设计简化了线程安全问题
+        {
+            std::lock_guard<std::mutex> lock(fd_mutex_);
+
+            // 清空并重新注册所有fd
+            // 使用EV_CLEAR标志，这样每次事件触发后需要重新注册
+            // 这样可以避免事件不断触发
+
+            // 注册listen fd（仅监听读事件）
+            for (int fd : listen_fds_) {
+                struct kevent kev;
+                EV_SET(&kev, fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, nullptr);
+                kevent(kq_fd_, &kev, 1, nullptr, 0, nullptr);
+            }
+
+            // 注册conn fd（监听读和写事件）
+            for (int fd : conn_fds_) {
+                struct kevent kev_read;
+                EV_SET(&kev_read, fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, nullptr);
+                kevent(kq_fd_, &kev_read, 1, nullptr, 0, nullptr);
+
+                struct kevent kev_write;
+                EV_SET(&kev_write, fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, nullptr);
+                kevent(kq_fd_, &kev_write, 1, nullptr, 0, nullptr);
+            }
+        }
+
+        // 等待事件（超时100ms，便于检查running_标志）
+        struct timespec timeout;
+        timeout.tv_sec = 0;
+        timeout.tv_nsec = 100 * 1000 * 1000; // 100ms
+
+        int n = kevent(kq_fd_, nullptr, 0, eventlist, kMaxEvents, &timeout);
+
+        if (n == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+            // 出错，短暂休眠后继续
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+
+        if (n == 0) {
+            // 超时，继续循环
+            continue;
+        }
+
+        // 处理触发的事件
+        for (int i = 0; i < n; ++i) {
+            int fd = static_cast<int>(eventlist[i].ident);
+            int filter = eventlist[i].filter;
+            uint32_t flags = eventlist[i].flags;
+
+            // 检查是否是唤醒pipe
+            if (fd == wakeup_read_fd_) {
+                // 读取pipe中的数据，清空唤醒事件
+                char buf[32];
+                while (read(wakeup_read_fd_, buf, sizeof(buf)) > 0) {
+                    // 持续读取直到清空
+                }
+                continue;
+            }
+
+            // 检查错误事件
+            if (flags & EV_ERROR) {
+                continue;
+            }
+
+            // 处理EOF事件（使用ERROR事件替代未定义的CLOSE）
+            if (flags & EV_EOF) {
+                std::lock_guard<std::mutex> lock(fd_mutex_);
+                auto it = fd_to_conn_id_.find(fd);
+                if (it != fd_to_conn_id_.end() && event_queue_ != nullptr) {
+                    Event event;
+                    event.type = EventType::ERROR;
+                    event.fd = fd;
+                    event.conn_id = it->second;
+                    event_queue_->push(event);
+                }
+                continue;
+            }
+
+            // 处理读事件
+            if (filter == EVFILT_READ) {
+                std::lock_guard<std::mutex> lock(fd_mutex_);
+
+                // 检查是否是listen fd
+                auto listen_it = listen_fd_to_port_.find(fd);
+                if (listen_it != listen_fd_to_port_.end()) {
+                    // 关联用例：IO-ACCEPT-001（功能用例）：监听socket接受新连接
+                    // listen fd可读，调用accept
+                    if (event_queue_ != nullptr) {
+                        Event event;
+                        event.type = EventType::ACCEPT;
+                        event.fd = fd;
+                        event.conn_id = 0;
+                        event_queue_->push(event);
+                    }
+                } else {
+                    // 检查是否是conn fd
+                    auto conn_it = fd_to_conn_id_.find(fd);
+                    if (conn_it != fd_to_conn_id_.end() && event_queue_ != nullptr) {
+                        // 关联用例：IO-READ-001（功能用例）：连接socket可读
+                        Event event;
+                        event.type = EventType::READ;
+                        event.fd = fd;
+                        event.conn_id = conn_it->second;
+                        event_queue_->push(event);
+                    }
+                }
+            }
+
+            // 处理写事件
+            if (filter == EVFILT_WRITE) {
+                std::lock_guard<std::mutex> lock(fd_mutex_);
+
+                // 检查是否是conn fd
+                auto conn_it = fd_to_conn_id_.find(fd);
+                if (conn_it != fd_to_conn_id_.end() && event_queue_ != nullptr) {
+                    // 关联用例：IO-WRITE-001（功能用例）：连接socket可写
+                    Event event;
+                    event.type = EventType::WRITE;
+                    event.fd = fd;
+                    event.conn_id = conn_it->second;
+                    event_queue_->push(event);
+                }
+            }
+        }
+    }
+
+    // 清理资源
+    if (wakeup_read_fd_ != -1) {
+        close(wakeup_read_fd_);
+        wakeup_read_fd_ = -1;
+    }
+    if (wakeup_fd_ != -1) {
+        close(wakeup_fd_);
+        wakeup_fd_ = -1;
+    }
+    if (kq_fd_ != -1) {
+        close(kq_fd_);
+        kq_fd_ = -1;
+    }
+}
+
+// ============================================================================
+//  IoThread Linux epoll实现（保留框架）
+// ============================================================================
+
+void IoThread::event_loop_linux() {
+    // Linux epoll实现框架（桩代码，预留完整实现位置）
+    while (running_.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
+
+// ============================================================================
+//  IoThread Windows IOCP实现（保留框架）
+// ============================================================================
 
 void IoThread::event_loop_windows() {
-    // MC-001修复：增加安全检查和框架注释
     // Windows IOCP实现框架（桩代码，预留完整实现位置）
-
-    // 完整实现步骤：
-    // 1. iocp_handle_ = CreateIoCompletionPort(...)
-    // 2. 创建事件用于唤醒
-    // 3. 进入事件循环
-
     while (running_.load(std::memory_order_acquire)) {
-        // 预留位置：GetQueuedCompletionStatus调用
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
+// ============================================================================
+//  IoThread唤醒机制
+// ============================================================================
+
 void IoThread::wake_up() {
-    // MC-001修复：增加安全框架
-    // 平台特定唤醒机制（桩代码，预留完整实现位置）
-
-    // 完整实现需要：
-    // Linux: write to eventfd
-    // Mac: write to pipe
-    // Windows: PostQueuedCompletionStatus
-
-    // 当前无操作，但保留接口用于未来扩展
+    // 平台特定唤醒机制
+#ifdef __APPLE__
+    if (wakeup_fd_ != -1) {
+        // 写入一个字节到pipe来唤醒kqueue
+        char buf = 'W';
+        ssize_t written = write(wakeup_fd_, &buf, 1);
+        (void)written; // 忽略返回值
+    }
+#elif defined(__linux__)
+    // Linux: write to eventfd (预留)
+    (void)0;
+#elif defined(_WIN32)
+    // Windows: PostQueuedCompletionStatus (预留)
+    (void)0;
+#else
+    (void)0;
+#endif
 }
 
 } // namespace https_server_sim

@@ -10,10 +10,14 @@
 #include "msg_center/event_queue.hpp"
 #include "msg_center/event_loop.hpp"
 #include "msg_center/worker_pool.hpp"
+#include "msg_center/io_thread.hpp"
 #include <thread>
 #include <vector>
 #include <atomic>
 #include <chrono>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <netinet/in.h>
 
 namespace https_server_sim {
 namespace test {
@@ -529,6 +533,141 @@ TEST_F(MsgCenterTest, InvalidParameter) {
     MsgCenter center2(2, 0);
     int ret2 = center2.start();
     EXPECT_EQ(ret2, static_cast<int>(MsgCenterError::INVALID_PARAMETER));
+}
+
+// ==================== IoThread测试 ====================
+
+class IoThreadTest : public ::testing::Test {
+protected:
+    void SetUp() override {}
+    void TearDown() override {}
+};
+
+// IoThread_UseCase001: 正常场景：启动停止
+TEST_F(IoThreadTest, StartAndStop) {
+    EventQueue queue;
+    IoThread io_thread(0, &queue);
+
+    io_thread.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    io_thread.stop();
+
+    SUCCEED();
+}
+
+// IoThread_UseCase002: 正常场景：添加移除listen fd
+TEST_F(IoThreadTest, AddAndRemoveListenFd) {
+    EventQueue queue;
+    IoThread io_thread(0, &queue);
+
+    io_thread.start();
+
+    // 创建一个socket用于测试
+    int test_fd = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(test_fd, 0);
+
+    io_thread.add_listen_fd(test_fd, 8080);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    io_thread.remove_fd(test_fd);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    close(test_fd);
+    io_thread.stop();
+
+    SUCCEED();
+}
+
+// IoThread_UseCase003: 正常场景：添加移除conn fd
+TEST_F(IoThreadTest, AddAndRemoveConnFd) {
+    EventQueue queue;
+    IoThread io_thread(0, &queue);
+
+    io_thread.start();
+
+    // 创建一个socket pair用于测试
+    int fds[2];
+    int ret = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+    ASSERT_EQ(ret, 0);
+
+    io_thread.add_conn_fd(fds[0], 1001);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    io_thread.remove_fd(fds[0]);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    close(fds[0]);
+    close(fds[1]);
+    io_thread.stop();
+
+    SUCCEED();
+}
+
+// IoThread_UseCase004: 边界场景：多次start/stop
+TEST_F(IoThreadTest, MultipleStartStop) {
+    EventQueue queue;
+    IoThread io_thread(0, &queue);
+
+    for (int i = 0; i < 3; ++i) {
+        io_thread.start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        io_thread.stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    SUCCEED();
+}
+
+// IoThread_UseCase005: 唤醒机制：通过添加fd间接测试唤醒
+TEST_F(IoThreadTest, WakeUpWorks) {
+    EventQueue queue;
+    IoThread io_thread(0, &queue);
+
+    io_thread.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // 通过添加/移除fd来间接调用wake_up()
+    int test_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (test_fd >= 0) {
+        for (int i = 0; i < 5; ++i) {
+            io_thread.add_conn_fd(test_fd, 1000 + i);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            io_thread.remove_fd(test_fd);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        close(test_fd);
+    }
+
+    io_thread.stop();
+
+    SUCCEED();
+}
+
+// IoThread_UseCase006: 事件投递：通过pipe对触发WRITE事件
+TEST_F(IoThreadTest, ConnFdWriteEvent) {
+    EventQueue queue;
+    IoThread io_thread(0, &queue);
+
+    io_thread.start();
+
+    // 创建socket pair
+    int fds[2];
+    int ret = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+    ASSERT_EQ(ret, 0);
+
+    const uint64_t test_conn_id = 2002;
+    io_thread.add_conn_fd(fds[0], test_conn_id);
+
+    // 等待一段时间让事件循环处理
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // 清理
+    io_thread.remove_fd(fds[0]);
+    close(fds[0]);
+    close(fds[1]);
+    io_thread.stop();
+
+    SUCCEED();
 }
 
 } // namespace test

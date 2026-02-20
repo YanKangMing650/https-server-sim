@@ -215,6 +215,10 @@ private:
     std::string cert_path_;
     std::string key_path_;
     std::string ca_path_;
+    std::string sm2_cert_path_;
+    std::string sm2_key_path_;
+    std::string sm2_sign_cert_path_;
+    std::string sm2_sign_key_path_;
     CertType cert_type_;
     bool use_gmssl_;
     int error_code_;

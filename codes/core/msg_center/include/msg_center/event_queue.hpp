@@ -78,9 +78,14 @@ public:
     bool is_closed() const;
 
     /**
-     * @brief 唤醒所有等待线程（用于停止时调用）
+     * @brief 唤醒所有等待线程（用于停止时调用，会关闭队列）
      */
     void wake_up();
+
+    /**
+     * @brief 关闭队列（停止接受新事件，唤醒等待线程）
+     */
+    void close();
 
 private:
     /**

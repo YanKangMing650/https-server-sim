@@ -118,12 +118,20 @@ struct CertConfig {
     std::string cert_path;
     std::string key_path;
     std::string ca_path;
+    std::string sm2_cert_path;
+    std::string sm2_key_path;
+    std::string sm2_sign_cert_path;
+    std::string sm2_sign_key_path;
     bool use_gmssl;
 
     CertConfig()
         : cert_path()
         , key_path()
         , ca_path()
+        , sm2_cert_path()
+        , sm2_key_path()
+        , sm2_sign_cert_path()
+        , sm2_sign_key_path()
         , use_gmssl(false)
     {
     }

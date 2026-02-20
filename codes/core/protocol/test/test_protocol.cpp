@@ -528,6 +528,53 @@ TEST_F(TlsHandlerTest, Reset) {
     EXPECT_EQ(handler.get_error_code(), 0);
 }
 
+// ==================== 国密证书测试 ====================
+
+class GmsslCertTest : public ::testing::Test {
+protected:
+    void SetUp() override {}
+    void TearDown() override {}
+};
+
+TEST_F(GmsslCertTest, CertConfigGmsslFields) {
+    CertConfig config;
+    EXPECT_TRUE(config.sm2_cert_path.empty());
+    EXPECT_TRUE(config.sm2_key_path.empty());
+    EXPECT_TRUE(config.sm2_sign_cert_path.empty());
+    EXPECT_TRUE(config.sm2_sign_key_path.empty());
+    EXPECT_FALSE(config.use_gmssl);
+}
+
+TEST_F(GmsslCertTest, CertConfigWithSm2CertOnly) {
+    CertConfig config;
+    config.sm2_cert_path = "/path/to/sm2_cert.pem";
+    EXPECT_FALSE(config.sm2_cert_path.empty());
+    EXPECT_TRUE(config.sm2_key_path.empty());
+}
+
+TEST_F(GmsslCertTest, CertConfigWithSm2SignCertOnly) {
+    CertConfig config;
+    config.sm2_sign_cert_path = "/path/to/sm2_sign_cert.pem";
+    config.sm2_sign_key_path = "/path/to/sm2_sign_key.pem";
+    EXPECT_FALSE(config.sm2_sign_cert_path.empty());
+    EXPECT_FALSE(config.sm2_sign_key_path.empty());
+}
+
+TEST_F(GmsslCertTest, CertConfigWithDualCerts) {
+    CertConfig config;
+    config.sm2_cert_path = "/path/to/sm2_enc_cert.pem";
+    config.sm2_key_path = "/path/to/sm2_enc_key.pem";
+    config.sm2_sign_cert_path = "/path/to/sm2_sign_cert.pem";
+    config.sm2_sign_key_path = "/path/to/sm2_sign_key.pem";
+    config.use_gmssl = true;
+
+    EXPECT_FALSE(config.sm2_cert_path.empty());
+    EXPECT_FALSE(config.sm2_key_path.empty());
+    EXPECT_FALSE(config.sm2_sign_cert_path.empty());
+    EXPECT_FALSE(config.sm2_sign_key_path.empty());
+    EXPECT_TRUE(config.use_gmssl);
+}
+
 // ==================== ConfigConverter测试 ====================
 
 class ConfigConverterTest : public ::testing::Test {
@@ -560,6 +607,8 @@ TEST_F(ConfigConverterTest, ConvertCertConfigWithGmssl) {
     ConfigConverter::convert_cert_config(src, dst);
 
     EXPECT_TRUE(dst.use_gmssl);
+    EXPECT_EQ(dst.sm2_cert_path, "/path/to/sm2_cert.pem");
+    EXPECT_EQ(dst.sm2_key_path, "/path/to/sm2_key.pem");
 }
 
 TEST_F(ConfigConverterTest, ConvertCertConfigGmsslOnlyCert) {
@@ -570,6 +619,7 @@ TEST_F(ConfigConverterTest, ConvertCertConfigGmsslOnlyCert) {
     ConfigConverter::convert_cert_config(src, dst);
 
     EXPECT_TRUE(dst.use_gmssl);
+    EXPECT_EQ(dst.sm2_cert_path, "/path/to/sm2_cert.pem");
 }
 
 TEST_F(ConfigConverterTest, ConvertCertConfigGmsslOnlyKey) {
@@ -580,6 +630,60 @@ TEST_F(ConfigConverterTest, ConvertCertConfigGmsslOnlyKey) {
     ConfigConverter::convert_cert_config(src, dst);
 
     EXPECT_TRUE(dst.use_gmssl);
+    EXPECT_EQ(dst.sm2_key_path, "/path/to/sm2_key.pem");
+}
+
+TEST_F(ConfigConverterTest, ConvertCertConfigWithSm2SignCert) {
+    config::CertificatesConfig src;
+    src.sm2_sign_cert_path = "/path/to/sm2_sign_cert.pem";
+    src.sm2_sign_key_path = "/path/to/sm2_sign_key.pem";
+
+    CertConfig dst;
+    ConfigConverter::convert_cert_config(src, dst);
+
+    EXPECT_TRUE(dst.use_gmssl);
+    EXPECT_EQ(dst.sm2_sign_cert_path, "/path/to/sm2_sign_cert.pem");
+    EXPECT_EQ(dst.sm2_sign_key_path, "/path/to/sm2_sign_key.pem");
+}
+
+TEST_F(ConfigConverterTest, ConvertCertConfigWithDualSm2Certs) {
+    config::CertificatesConfig src;
+    src.sm2_cert_path = "/path/to/sm2_enc_cert.pem";
+    src.sm2_key_path = "/path/to/sm2_enc_key.pem";
+    src.sm2_sign_cert_path = "/path/to/sm2_sign_cert.pem";
+    src.sm2_sign_key_path = "/path/to/sm2_sign_key.pem";
+
+    CertConfig dst;
+    ConfigConverter::convert_cert_config(src, dst);
+
+    EXPECT_TRUE(dst.use_gmssl);
+    EXPECT_EQ(dst.sm2_cert_path, "/path/to/sm2_enc_cert.pem");
+    EXPECT_EQ(dst.sm2_key_path, "/path/to/sm2_enc_key.pem");
+    EXPECT_EQ(dst.sm2_sign_cert_path, "/path/to/sm2_sign_cert.pem");
+    EXPECT_EQ(dst.sm2_sign_key_path, "/path/to/sm2_sign_key.pem");
+}
+
+TEST_F(ConfigConverterTest, ConvertCertConfigAllFields) {
+    config::CertificatesConfig src;
+    src.cert_path = "/path/to/rsa_cert.pem";
+    src.key_path = "/path/to/rsa_key.pem";
+    src.ca_path = "/path/to/ca.pem";
+    src.sm2_cert_path = "/path/to/sm2_enc_cert.pem";
+    src.sm2_key_path = "/path/to/sm2_enc_key.pem";
+    src.sm2_sign_cert_path = "/path/to/sm2_sign_cert.pem";
+    src.sm2_sign_key_path = "/path/to/sm2_sign_key.pem";
+
+    CertConfig dst;
+    ConfigConverter::convert_cert_config(src, dst);
+
+    EXPECT_TRUE(dst.use_gmssl);
+    EXPECT_EQ(dst.cert_path, "/path/to/rsa_cert.pem");
+    EXPECT_EQ(dst.key_path, "/path/to/rsa_key.pem");
+    EXPECT_EQ(dst.ca_path, "/path/to/ca.pem");
+    EXPECT_EQ(dst.sm2_cert_path, "/path/to/sm2_enc_cert.pem");
+    EXPECT_EQ(dst.sm2_key_path, "/path/to/sm2_enc_key.pem");
+    EXPECT_EQ(dst.sm2_sign_cert_path, "/path/to/sm2_sign_cert.pem");
+    EXPECT_EQ(dst.sm2_sign_key_path, "/path/to/sm2_sign_key.pem");
 }
 
 TEST_F(ConfigConverterTest, ConvertTlsConfigHttp1Only) {
