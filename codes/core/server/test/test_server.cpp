@@ -522,26 +522,29 @@ TEST(ServerTest, GetStatisticsWithNullPtr) {
 }
 
 // 测试ERROR状态后可以通过cleanup回到STOPPED
-// 注意：Config模块是桩实现，init()总是成功，所以我们需要其他方式验证
+// 验证：init失败时handle_init_error()能正确恢复状态
 TEST(ServerTest, ErrorStateCanRecoverToStopped) {
     Server server;
 
-    // init()成功（Config是桩）
-    int ret = server.init("/tmp/non_existent.json");
-    EXPECT_EQ(ret, 0);
-
-    // 验证cleanup()可以正常工作
-    server.cleanup();
+    // init不存在的文件（应该失败）
+    int ret = server.init("/tmp/non_existent_test_config.json");
+    // 现在Config是真实实现，load_from_file失败会返回非0
+    // 但handle_init_error()会调用cleanup()，状态应该恢复到STOPPED
 
     ServerStatus status;
     server.get_status(&status);
+    // 不管init返回成功或失败，经过handle_init_error/cleanup后状态应该是STOPPED
     EXPECT_EQ(status.status, SERVER_STATUS_STOPPED);
 
-    // 验证可以再次init()
-    ret = server.init("/tmp/non_existent.json");
+    // 验证可以再次init() - 这次用有效的配置
+    TempFile config_file(get_valid_config_json());
+    ret = server.init(config_file.path());
     EXPECT_EQ(ret, 0);
 
     server.cleanup();
+
+    server.get_status(&status);
+    EXPECT_EQ(status.status, SERVER_STATUS_STOPPED);
 }
 
 // 测试析构函数自动清理

@@ -29,15 +29,19 @@ void EventLoop::run() {
     start_cv_.notify_all();
 
     while (running_.load(std::memory_order_acquire)) {
-        Event event = event_queue_->pop();
-
-        if (event.type != EventType::SHUTDOWN) {
-            if (event.handler) {
-                event.handler();
+        Event event;
+        if (event_queue_->try_pop(event)) {
+            if (event.type != EventType::SHUTDOWN) {
+                if (event.handler) {
+                    event.handler();
+                }
+            } else {
+                // 收到SHUTDOWN事件，退出循环
+                break;
             }
         } else {
-            // 收到SHUTDOWN事件，退出循环
-            break;
+            // 队列为空，短暂休眠后继续检查running_标志
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 
@@ -48,9 +52,8 @@ void EventLoop::stop() {
     running_.store(false, std::memory_order_release);
 
     if (event_queue_) {
-        // 尝试推送SHUTDOWN事件，即使push失败也继续调用wake_up确保线程被唤醒
+        // 尝试推送SHUTDOWN事件作为补充保障，但不关闭队列
         (void)event_queue_->push(Event::make_shutdown_event());
-        event_queue_->wake_up();
     }
 }
 
