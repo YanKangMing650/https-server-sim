@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cerrno>
 #include <string>
 #include <map>
 #include <vector>
@@ -40,6 +41,14 @@ constexpr uint32_t HTTP2_DEFAULT_INITIAL_WINDOW_SIZE = 65535;
 
 // ==================== 通用缓冲区常量 ====================
 constexpr size_t TEMP_BUFFER_SIZE = 4096;
+
+// ==================== ALPN协议常量 ====================
+constexpr const char* ALPN_HTTP11 = "http/1.1";
+constexpr const char* ALPN_HTTP2_HTTP11 = "h2,http/1.1";
+
+// ==================== TLS版本默认值 ====================
+constexpr bool DEFAULT_ENABLE_TLS_1_2 = true;
+constexpr bool DEFAULT_ENABLE_TLS_1_3 = true;
 
 // ==================== HTTP/2帧标志 ====================
 constexpr uint8_t HTTP2_FLAG_END_STREAM = 0x01;
@@ -112,7 +121,10 @@ struct CertConfig {
     bool use_gmssl;
 
     CertConfig()
-        : use_gmssl(false)
+        : cert_path()
+        , key_path()
+        , ca_path()
+        , use_gmssl(false)
     {
     }
 };
@@ -125,8 +137,10 @@ struct TlsConfig {
     bool enable_tls_1_2;
 
     TlsConfig()
-        : enable_tls_1_3(true)
-        , enable_tls_1_2(true)
+        : cipher_suites()
+        , alpn_protocols(ALPN_HTTP11)
+        , enable_tls_1_3(DEFAULT_ENABLE_TLS_1_3)
+        , enable_tls_1_2(DEFAULT_ENABLE_TLS_1_2)
     {
     }
 };

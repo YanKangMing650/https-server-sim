@@ -5,6 +5,8 @@
 //  版权: Copyright (c) 2026
 // =============================================================================
 #include "protocol/protocol.hpp"
+#include "protocol/config_converter.hpp"
+#include "protocol/protocol_handler_factory.hpp"
 #include "utils/buffer.hpp"
 #include <gtest/gtest.h>
 #include <cstring>
@@ -33,7 +35,7 @@ TEST_F(ProtocolTypesTest, CertConfigDefaultValues) {
 TEST_F(ProtocolTypesTest, TlsConfigDefaultValues) {
     TlsConfig config;
     EXPECT_TRUE(config.cipher_suites.empty());
-    EXPECT_TRUE(config.alpn_protocols.empty());
+    EXPECT_EQ(config.alpn_protocols, ALPN_HTTP11);  // 默认值已设置为http/1.1
     EXPECT_TRUE(config.enable_tls_1_3);
     EXPECT_TRUE(config.enable_tls_1_2);
 }
@@ -524,6 +526,138 @@ TEST_F(TlsHandlerTest, Reset) {
     handler.set_error(-10, "Test error");
     handler.reset();
     EXPECT_EQ(handler.get_error_code(), 0);
+}
+
+// ==================== ConfigConverter测试 ====================
+
+class ConfigConverterTest : public ::testing::Test {
+protected:
+    void SetUp() override {}
+    void TearDown() override {}
+};
+
+TEST_F(ConfigConverterTest, ConvertCertConfigBasic) {
+    config::CertificatesConfig src;
+    src.cert_path = "/path/to/cert.pem";
+    src.key_path = "/path/to/key.pem";
+    src.ca_path = "/path/to/ca.pem";
+
+    CertConfig dst;
+    ConfigConverter::convert_cert_config(src, dst);
+
+    EXPECT_EQ(dst.cert_path, "/path/to/cert.pem");
+    EXPECT_EQ(dst.key_path, "/path/to/key.pem");
+    EXPECT_EQ(dst.ca_path, "/path/to/ca.pem");
+    EXPECT_FALSE(dst.use_gmssl);
+}
+
+TEST_F(ConfigConverterTest, ConvertCertConfigWithGmssl) {
+    config::CertificatesConfig src;
+    src.sm2_cert_path = "/path/to/sm2_cert.pem";
+    src.sm2_key_path = "/path/to/sm2_key.pem";
+
+    CertConfig dst;
+    ConfigConverter::convert_cert_config(src, dst);
+
+    EXPECT_TRUE(dst.use_gmssl);
+}
+
+TEST_F(ConfigConverterTest, ConvertCertConfigGmsslOnlyCert) {
+    config::CertificatesConfig src;
+    src.sm2_cert_path = "/path/to/sm2_cert.pem";
+
+    CertConfig dst;
+    ConfigConverter::convert_cert_config(src, dst);
+
+    EXPECT_TRUE(dst.use_gmssl);
+}
+
+TEST_F(ConfigConverterTest, ConvertCertConfigGmsslOnlyKey) {
+    config::CertificatesConfig src;
+    src.sm2_key_path = "/path/to/sm2_key.pem";
+
+    CertConfig dst;
+    ConfigConverter::convert_cert_config(src, dst);
+
+    EXPECT_TRUE(dst.use_gmssl);
+}
+
+TEST_F(ConfigConverterTest, ConvertTlsConfigHttp1Only) {
+    config::Config config;
+    config::Http2Config http2_config;
+    http2_config.enabled = false;
+    config.set_http2(http2_config);
+
+    TlsConfig dst;
+    ConfigConverter::convert_tls_config(config, dst);
+
+    EXPECT_EQ(dst.alpn_protocols, ALPN_HTTP11);
+    EXPECT_EQ(dst.enable_tls_1_3, DEFAULT_ENABLE_TLS_1_3);
+    EXPECT_EQ(dst.enable_tls_1_2, DEFAULT_ENABLE_TLS_1_2);
+}
+
+TEST_F(ConfigConverterTest, ConvertTlsConfigHttp2Enabled) {
+    config::Config config;
+    config::Http2Config http2_config;
+    http2_config.enabled = true;
+    config.set_http2(http2_config);
+
+    TlsConfig dst;
+    ConfigConverter::convert_tls_config(config, dst);
+
+    EXPECT_EQ(dst.alpn_protocols, ALPN_HTTP2_HTTP11);
+}
+
+TEST_F(ConfigConverterTest, ConvertTlsConfigCipherSuites) {
+    config::Config config;
+    config::CertificatesConfig cert_config;
+    cert_config.cipher_suite = "ECDHE-ECDSA-AES256-GCM-SHA384";
+    config.set_certificates(cert_config);
+
+    TlsConfig dst;
+    ConfigConverter::convert_tls_config(config, dst);
+
+    EXPECT_EQ(dst.cipher_suites, "ECDHE-ECDSA-AES256-GCM-SHA384");
+}
+
+// ==================== ProtocolHandlerFactory测试 ====================
+
+class ProtocolHandlerFactoryTest : public ::testing::Test {
+protected:
+    void SetUp() override {}
+    void TearDown() override {}
+};
+
+TEST_F(ProtocolHandlerFactoryTest, CreateWithHttp2Disabled) {
+    config::Config config;
+    config::Http2Config http2_config;
+    http2_config.enabled = false;
+    config.set_http2(http2_config);
+
+    auto handler = ProtocolHandlerFactory::create(config);
+    ASSERT_NE(handler, nullptr);
+    EXPECT_EQ(handler->get_protocol_type(), ProtocolType::HTTP_1_1);
+}
+
+// TODO: 当HTTP/2完整实现后，此测试用例需要更新为期望返回HTTP_2类型
+TEST_F(ProtocolHandlerFactoryTest, CreateWithHttp2Enabled_ReturnsHttp1HandlerForNow) {
+    config::Config config;
+    config::Http2Config http2_config;
+    http2_config.enabled = true;
+    config.set_http2(http2_config);
+
+    auto handler = ProtocolHandlerFactory::create(config);
+    ASSERT_NE(handler, nullptr);
+    // 当前版本简化实现：即使HTTP/2启用也返回Http1Handler
+    EXPECT_EQ(handler->get_protocol_type(), ProtocolType::HTTP_1_1);
+}
+
+TEST_F(ProtocolHandlerFactoryTest, CreateWithDefaultConfig) {
+    config::Config config;
+
+    auto handler = ProtocolHandlerFactory::create(config);
+    ASSERT_NE(handler, nullptr);
+    EXPECT_EQ(handler->get_protocol_type(), ProtocolType::HTTP_1_1);
 }
 
 } // namespace test
