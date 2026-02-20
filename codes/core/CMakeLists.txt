@@ -88,3 +88,9 @@ if(CORE_TEST_SOURCES)
             pthread
     )
 endif()
+
+# 添加集成测试
+option(BUILD_INTEGRATION_TESTS "Build integration tests" ON)
+if(BUILD_INTEGRATION_TESTS)
+    add_subdirectory(test/integration_tests)
+endif()
